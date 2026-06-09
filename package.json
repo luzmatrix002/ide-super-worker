@@ -1,0 +1,41 @@
+{
+  "name": "mcp-codex-worker",
+  "version": "2.4.0",
+  "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "setup": "tsx src/setup.ts",
+    "doctor": "tsx src/doctor.ts",
+    "doctor:network": "tsx src/doctor.ts --network",
+    "smoke": "npm run build && node dist/smoke_test.js",
+    "test": "npm run build && node dist/tests/core.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "PROMO.md",
+    "RELEASE_CHECKLIST.md",
+    "codex-mcp.example.toml",
+    "docs",
+    ".env.example"
+  ]
+}

@@ -1,0 +1,115 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+export const DEFAULT_MODEL = "Qwen3.6-35B-A3B-APEX-I-Compact.gguf";
+export const DEFAULT_CLAUDE_CLI_MODEL = "sonnet";
+export const SERVER_VERSION = "2.4.0";
+
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(raw.toLowerCase())) return false;
+  return fallback;
+}
+
+function readIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function realDirectory(candidate: string, label: string): string {
+  const resolved = path.resolve(candidate);
+  let realPath: string;
+  try {
+    realPath = fs.realpathSync.native(resolved);
+  } catch (error) {
+    throw new Error(`${label} does not exist or cannot be accessed: ${resolved}`);
+  }
+
+  const stat = fs.statSync(realPath);
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} is not a directory: ${realPath}`);
+  }
+  return realPath;
+}
+
+export const SANDBOX_ROOT = realDirectory(process.env.SANDBOX_ROOT || process.cwd(), "SANDBOX_ROOT");
+
+export const LOG_BUFFER_MAX = readIntegerEnv("LOG_BUFFER_MAX", 2000, 100, 100000);
+export const LOG_LINE_MAX = readIntegerEnv("LOG_LINE_MAX", 20000, 1000, 200000);
+export const RAW_STREAM_MAX = readIntegerEnv("RAW_STREAM_MAX_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024);
+export const DIFF_MAX_BYTES = readIntegerEnv("DIFF_MAX_BYTES", 200_000, 10_000, 5 * 1024 * 1024);
+export const CHECK_OUTPUT_MAX = readIntegerEnv("CHECK_OUTPUT_MAX", 20_000, 1_000, 200_000);
+export const CHECK_TIMEOUT_MS = readIntegerEnv("CHECK_TIMEOUT_MS", 10 * 60 * 1000, 1_000, 60 * 60 * 1000);
+export const JOB_TTL_MS = readIntegerEnv("JOB_TTL_MS", 10 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
+export const WAIT_DEFAULT_MS = readIntegerEnv("WAIT_DEFAULT_MS", 30 * 60 * 1000, 1_000, 6 * 60 * 60 * 1000);
+export const WAIT_MAX_MS = readIntegerEnv("WAIT_MAX_MS", 6 * 60 * 60 * 1000, 1_000, 24 * 60 * 60 * 1000);
+export const MAX_RUNNING_JOBS = readIntegerEnv("MAX_RUNNING_JOBS", 4, 1, 100);
+export const MAX_STORED_JOBS = readIntegerEnv("MAX_STORED_JOBS", 100, 10, 10000);
+export const DEFAULT_PERMISSION_MODE = process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
+
+// --- Mythos-style deterministic reasoning layer ---
+// MYTHOS_REASONING: attach the deterministic reasoning report to every job.
+// MYTHOS_AUTO_REVISE: auto-retry Claude Code on concrete, fixable failures.
+// MYTHOS_MAX_REVISE_PASSES: upper bound on automatic revise passes (0-4).
+export const REASONING_ENABLED = readBooleanEnv("MYTHOS_REASONING", true);
+export const AUTO_REVISE_ENABLED = readBooleanEnv("MYTHOS_AUTO_REVISE", true);
+export const MAX_REVISE_PASSES = readIntegerEnv("MYTHOS_MAX_REVISE_PASSES", 1, 0, 4);
+
+export function getModelName(explicit?: unknown): string {
+  const candidate =
+    typeof explicit === "string" && explicit.trim()
+      ? explicit.trim()
+      : process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || DEFAULT_MODEL;
+  return candidate.trim();
+}
+
+export function getClaudeCliModel(): string {
+  return (process.env.CLAUDE_CODE_MODEL || process.env.CLAUDE_CLI_MODEL || DEFAULT_CLAUDE_CLI_MODEL).trim();
+}
+
+export function getGatewayBaseUrl(): string | undefined {
+  return process.env.ONEAPI_BASE_URL || process.env.ANTHROPIC_BASE_URL;
+}
+
+export function getGatewayApiKey(): string | undefined {
+  return process.env.ONEAPI_API_KEY || process.env.ANTHROPIC_API_KEY;
+}
+
+// --- Fallback gateway (used when the primary upstream is unreachable/erroring) ---
+// Keys live in env / .env only, never in source or tracked config.
+export function getFallbackBaseUrl(): string | undefined {
+  const raw = process.env.FALLBACK_BASE_URL;
+  return raw && raw.trim() ? raw.trim() : undefined;
+}
+
+export function getFallbackApiKey(): string | undefined {
+  const raw = process.env.FALLBACK_API_KEY;
+  return raw && raw.trim() ? raw.trim() : undefined;
+}
+
+export function getFallbackModel(): string | undefined {
+  const raw = process.env.FALLBACK_MODEL;
+  return raw && raw.trim() ? raw.trim() : undefined;
+}
+
+export function getFallbackEscalateModel(): string | undefined {
+  const raw = process.env.FALLBACK_ESCALATE_MODEL;
+  return raw && raw.trim() ? raw.trim() : undefined;
+}
+
+export function fallbackConfigured(): boolean {
+  return Boolean(getFallbackBaseUrl() && getFallbackApiKey());
+}
+
+export function allowOfficialAnthropic(): boolean {
+  return process.env.ALLOW_OFFICIAL_ANTHROPIC === "1";
+}
+
+export function allowBypassPermissions(): boolean {
+  return process.env.ALLOW_BYPASS_PERMISSIONS === "1";
+}

@@ -1,0 +1,8 @@
+[mcp_servers.codex_async_worker]
+command = "node"
+args = ["D:/path/to/mcp-codex-worker/dist/index.js"]
+cwd = "D:/path/to/mcp-codex-worker"
+startup_timeout_sec = 10
+tool_timeout_sec = 3600
+env = { SANDBOX_ROOT = "D:/workspaces", ONEAPI_BASE_URL = "https://your-gateway.example.com/v1", CLAUDE_MODEL = "deepseek-v4-flash", CLAUDE_CODE_MODEL = "sonnet", CLAUDE_PERMISSION_MODE = "acceptEdits", USE_OPENAI_ADAPTER = "1", ADAPTER_ENABLE_THINKING = "0", WAIT_DEFAULT_MS = "1800000", DIFF_MAX_BYTES = "20000" }
+env_vars = ["ONEAPI_API_KEY"]
