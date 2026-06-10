@@ -6,7 +6,7 @@
     <title>MCP Codex Worker</title>
     <meta
       name="description"
-      content="Cost-saving async MCP worker for Codex that delegates heavy code tasks to cheaper OpenAI-compatible gateways."
+      content="Make Codex stop eating giant diffs. Delegate heavy code work to a cheaper async MCP worker."
     />
     <style>
       :root {
@@ -51,7 +51,7 @@
         letter-spacing: 0;
       }
       .lead {
-        max-width: 760px;
+        max-width: 820px;
         margin: 0;
         color: var(--muted);
         font-size: 22px;
@@ -129,9 +129,56 @@
         padding: 30px 0;
         color: var(--muted);
       }
+      .diagram {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        gap: 12px;
+        align-items: center;
+        margin: 22px 0;
+      }
+      .node {
+        min-height: 120px;
+        display: grid;
+        align-content: center;
+        gap: 8px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+      }
+      .node strong {
+        font-size: 18px;
+      }
+      .node span {
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .arrow {
+        color: var(--accent);
+        font-weight: 800;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+      .bad {
+        border-top: 4px solid #b91c1c;
+      }
+      .good {
+        border-top: 4px solid var(--accent);
+      }
       @media (max-width: 800px) {
         .grid {
           grid-template-columns: 1fr;
+        }
+        .diagram,
+        .split {
+          grid-template-columns: 1fr;
+        }
+        .arrow {
+          text-align: center;
+          transform: rotate(90deg);
         }
         .lead {
           font-size: 19px;
@@ -144,11 +191,11 @@
       <div class="wrap hero">
         <h1>MCP Codex Worker</h1>
         <p class="lead">
-          Delegate expensive Codex implementation loops to a cheaper async worker, then return compact,
-          verified results instead of flooding the main thread with giant diffs.
+          Stop feeding Codex giant diffs. Delegate expensive code-reading and repair loops to a cheaper
+          async worker, then return only compact, verified results.
         </p>
         <div class="actions">
-          <a class="button" href="https://github.com/">View on GitHub</a>
+          <a class="button" href="https://github.com/sorryorc/mcp-codex-worker">View on GitHub</a>
           <a class="button secondary" href="#quickstart">Quick start</a>
         </div>
       </div>
@@ -157,11 +204,50 @@
     <main>
       <section>
         <div class="wrap">
+          <h2>The Plain Flow</h2>
+          <div class="diagram" aria-label="Codex delegates to worker, worker calls cheap gateway, worker returns compact checks">
+            <div class="node">
+              <strong>Codex</strong>
+              <span>Plans, reviews, decides.</span>
+            </div>
+            <div class="arrow">-&gt;</div>
+            <div class="node">
+              <strong>MCP Worker</strong>
+              <span>Runs Claude Code in the background.</span>
+            </div>
+            <div class="arrow">-&gt;</div>
+            <div class="node">
+              <strong>Cheap Gateway</strong>
+              <span>Handles bulky model tokens.</span>
+            </div>
+          </div>
+          <div class="callout">Back to Codex: changed files, checks, logs, and optional diff.</div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap">
+          <h2>Before And After</h2>
+          <div class="split">
+            <article class="card bad">
+              <h3>Without Worker</h3>
+              <p>Codex reads large files, watches repair loops, ingests full diffs, and burns premium context on repetitive implementation work.</p>
+            </article>
+            <article class="card good">
+              <h3>With Worker</h3>
+              <p>Codex sends one compact task. The worker reads, edits, tests, and returns evidence that Codex can review quickly.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap">
           <h2>Why Teams Use It</h2>
           <div class="grid">
             <article class="card">
-              <h3>Lower Token Intake</h3>
-              <p>Codex receives changed files, checks, and optional diffs, while the worker handles bulky code reading.</p>
+              <h3>Cleaner Codex Context</h3>
+              <p>Codex sees evidence, not every intermediate file read and patch attempt.</p>
             </article>
             <article class="card">
               <h3>Cheaper Backends</h3>

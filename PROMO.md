@@ -2,13 +2,38 @@
 
 ## One-Liner
 
-MCP Codex Worker lets Codex delegate expensive code-reading and patch loops to cheaper worker models while Codex receives only compact, verifiable results.
+Make Codex stop eating giant diffs: delegate heavy code work to a cheaper async worker and return only compact, verified results.
 
 ## Short Pitch
 
-Codex is excellent at orchestration and review, but large implementation loops can burn a lot of premium context. MCP Codex Worker adds an async background worker: Codex sends a task, Claude Code runs locally, a built-in adapter routes model calls to cheap OpenAI-compatible gateways, and Codex gets back changed files, checks, logs, and optional diffs.
+Codex is excellent at orchestration and review. It is wasteful to make the main thread ingest every file read, every failed repair attempt, and every huge diff.
 
-It is built for people who want practical AI coding throughput without turning every subtask into a premium-token bonfire.
+MCP Codex Worker adds a cheaper background lane. Codex sends a small MCP request, Claude Code runs the task locally, the adapter routes model calls to an OpenAI-compatible gateway, and Codex gets back the clean part: changed files, checks, logs, and an optional diff.
+
+It is built for people who want more AI coding throughput without turning every subtask into a premium-context bonfire.
+
+## Dead Simple Diagram
+
+```text
+Before:
+Codex -> reads repo -> edits -> tests -> reads diff -> burns context
+
+After:
+Codex -> Worker -> cheap model does heavy loop -> Codex gets summary/checks
+```
+
+```text
+               small request
+Codex --------------------------------> MCP Worker
+  ^                                         |
+  | compact result                          | launches
+  | changed_files + checks                  v
+  +---------------------------------- Claude Code
+                                            |
+                                            | adapter
+                                            v
+                               cheap OpenAI-compatible gateway
+```
 
 ## Key Benefits
 
@@ -18,9 +43,20 @@ It is built for people who want practical AI coding throughput without turning e
 - Keep quality rails: test commands, deterministic result assessment, and bounded auto-revise.
 - Use `analyze` for fast read-only summaries without launching a full agent loop.
 
+## Stronger Positioning
+
+This is not a chatbot wrapper. It is cost-control infrastructure for AI coding:
+
+- Codex stays as the high-quality planner/reviewer.
+- Cheap models do the bulky implementation labor.
+- Tests and scoped patch checks decide whether the worker earned trust.
+- Large diffs become optional instead of the default payload.
+
+The pitch is simple: keep the expensive brain clean; move repetitive muscle work to a cheaper lane.
+
 ## Suggested GitHub Description
 
-Cost-saving async MCP worker for Codex: run Claude Code through cheap OpenAI-compatible gateways, return compact verified results, and cut main-thread token waste.
+Cost-saving async MCP worker for Codex: delegate heavy Claude Code loops to cheap OpenAI-compatible gateways and return compact verified results.
 
 ## Suggested Topics
 
@@ -30,7 +66,11 @@ Cost-saving async MCP worker for Codex: run Claude Code through cheap OpenAI-com
 
 I built an MCP worker for Codex that changes where the expensive tokens go.
 
-Instead of asking the main Codex thread to read every file, run every repair loop, and ingest every diff, Codex can delegate the job to a background worker. The worker launches Claude Code, routes model traffic through a local Anthropic-to-OpenAI adapter, and sends the heavy work to cheaper compatible gateways.
+The problem: Codex is great at planning and review, but implementation loops are noisy. Reading lots of files, trying fixes, running tests, and ingesting big diffs can burn premium context fast.
+
+The fix: Codex delegates the noisy middle to a background worker.
+
+The worker launches Claude Code, routes model traffic through a local Anthropic-to-OpenAI adapter, and sends the heavy work to cheaper compatible gateways.
 
 Codex gets back the part it actually needs: changed files, checks, logs, and an optional diff.
 
@@ -45,6 +85,13 @@ Useful pieces:
 - optional fallback gateway and worktree isolation
 
 If your AI coding workflow is bottlenecked by cost, quota, or long context churn, this is a small piece of plumbing that can buy back a surprising amount of headroom.
+
+Diagram:
+
+```text
+Codex planner -> MCP worker -> Claude Code -> cheap gateway
+Codex reviewer <- changed files + checks <- worker
+```
 
 ## Target Audiences
 
@@ -69,3 +116,10 @@ If your AI coding workflow is bottlenecked by cost, quota, or long context churn
 3. Show `wait` returning changed files and checks.
 4. Show metrics JSONL with gateway token usage.
 5. Show a second read-only `analyze` call returning quickly without Claude Code startup.
+
+## Landing Page Headline Options
+
+- Stop feeding Codex giant diffs.
+- Give Codex a cheaper worker lane.
+- Keep Codex for decisions. Move bulk code work elsewhere.
+- The async worker that keeps Codex context clean.

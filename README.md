@@ -1,8 +1,40 @@
 # MCP Codex Worker
 
-Run expensive Codex sub-tasks on a cheaper worker model, keep Codex focused on orchestration, and return only the evidence Codex needs.
+Stop spending premium Codex context on bulk code reading, patch loops, and giant diffs.
 
-`mcp-codex-worker` is a Model Context Protocol server for Codex Desktop. It starts Claude Code as an async background worker, translates Claude Code's Anthropic `/v1/messages` traffic to OpenAI-compatible `/chat/completions`, and sends the heavy token work to a low-cost gateway such as DeepSeek, OneAPI, New API, or another compatible provider.
+`mcp-codex-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
+
+## The Simple Picture
+
+Without this worker, Codex often pays to ingest everything:
+
+```text
+Codex main thread
+  -> reads large files
+  -> runs repair loops
+  -> receives full diffs
+  -> burns premium context
+```
+
+With this worker, Codex delegates the noisy middle:
+
+```mermaid
+flowchart LR
+  A["Codex<br/>planner and reviewer"] -->|"small MCP start request"| B["MCP Codex Worker"]
+  B -->|"launches"| C["Claude Code CLI<br/>background job"]
+  C -->|"Anthropic messages"| D["Local adapter"]
+  D -->|"OpenAI-compatible chat"| E["Cheap gateway model<br/>DeepSeek / OneAPI / New API"]
+  C -->|"git diff + checks"| B
+  B -->|"changed_files + checks<br/>optional diff"| A
+```
+
+Plain version:
+
+```text
+Codex asks: "fix this, run tests"
+Worker does: read files -> edit -> test -> summarize
+Codex gets: files changed + checks passed + optional diff
+```
 
 ## Why It Exists
 
@@ -17,6 +49,19 @@ This worker changes the shape of the bill:
 
 For large code-reading and patching tasks, this can cut the expensive main-thread token intake dramatically because Codex no longer has to ingest every intermediate file read and full patch body.
 
+## What Makes It Better Than "Just Use A Cheaper Model"
+
+Cheap models alone are not enough. You still need routing, safety, result shape, and verification.
+
+This project gives you the missing plumbing:
+
+- A Codex-native MCP interface, so delegation is one tool call.
+- A Claude Code execution loop, so the worker can actually edit and test.
+- A local Anthropic-to-OpenAI adapter, so Claude Code can use cheaper gateways.
+- Scope enforcement and check commands, so work is auditable.
+- Compact result payloads, so Codex does not swallow unnecessary tokens.
+- Metrics, fallback, retries, and optional worktree isolation for real operations.
+
 ## Highlights
 
 - Async MCP tools: `start`, `get`, `tail`, `wait`, `cancel`.
@@ -29,6 +74,18 @@ For large code-reading and patching tasks, this can cut the expensive main-threa
 - Optional fallback gateway when the primary provider fails.
 - Optional worktree isolation for parallel jobs inside one repository.
 - Secret redaction in logs and tool responses.
+
+## Use Cases
+
+Use it when you want Codex to stay sharp instead of stuffed:
+
+| Task | Normal flow | Worker flow |
+| --- | --- | --- |
+| Fix a bug in a large repo | Codex reads many files and test outputs | Worker reads/edits/tests, Codex reviews compact result |
+| Summarize implementation details | Full agent loop may start | `analyze` calls cheap gateway directly |
+| Run repeated repair passes | Main thread absorbs every attempt | Worker handles loop and returns final evidence |
+| Parallel scoped edits | One dirty worktree gets tangled | Optional git worktree isolation keeps jobs apart |
+| Cost accounting | Claude Code cost may be misleading | Gateway token usage is written to JSONL |
 
 ## Tool Surface
 
@@ -125,6 +182,17 @@ This project stacks several cost controls:
 - Prompt-cache-friendly usage keeps stable instructions before dynamic task text.
 
 Claude Code's own `total_cost_usd` may reflect Anthropic pricing, not your gateway pricing. Use `WORKER_METRICS_FILE` and provider prices for real accounting.
+
+## Cost-Saving Checklist
+
+For best results:
+
+1. Set `include_diff:false` for delegated implementation tasks.
+2. Keep `scoped_patch.paths` narrow.
+3. Add concrete `checks` so the worker proves completion.
+4. Use `analyze` for read-only questions.
+5. Enable `WORKER_METRICS_FILE` and compare token usage by route/model.
+6. Use a cheap default model and reserve `WORKER_ESCALATE_MODEL` for difficult revise passes.
 
 ## Important Environment Variables
 
