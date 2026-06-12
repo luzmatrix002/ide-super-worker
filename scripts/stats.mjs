@@ -1,4 +1,20 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+function loadDotEnv(file = path.resolve(process.cwd(), ".env")) {
+  if (!fs.existsSync(file)) return;
+  for (const rawLine of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    if (process.env[key]) continue;
+    process.env[key] = rawValue.replace(/^['"]|['"]$/g, "");
+  }
+}
+
+loadDotEnv();
 
 const file = process.argv[2] || process.env.WORKER_METRICS_FILE;
 
