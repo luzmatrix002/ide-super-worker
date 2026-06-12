@@ -12,6 +12,7 @@ export interface JobReasoningConfig {
   reasoningEnabled: boolean;
   autoReviseEnabled: boolean;
   maxRevisePasses: number;
+  stages?: StartJobInput["stages"];
 }
 
 export function createJobState(
@@ -49,6 +50,10 @@ export function createJobState(
     autoReviseEnabled: reasoning?.autoReviseEnabled ?? false,
     maxRevisePasses: reasoning?.maxRevisePasses ?? 0,
     revisePass: 0,
+    seenBlockerSigs: new Set<string>(),
+    stages: reasoning?.stages,
+    stageIndex: 0,
+    stageResults: [],
     result: {
       server_version: SERVER_VERSION,
       job_status: "running",

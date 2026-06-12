@@ -23,6 +23,21 @@ export interface CheckCommand {
   timeout_ms?: number;
 }
 
+export interface StageInput {
+  prompt: string;
+  checks?: CheckCommand[];
+  scoped_patch?: ScopedPatch;
+}
+
+export interface StageResult {
+  index: number;
+  status: JobStatus;
+  changed_files: string[];
+  checks: string[];
+  error?: string;
+  failure_digest?: string;
+}
+
 export interface JobResult {
   server_version?: string;
   job_status?: string;
@@ -35,8 +50,11 @@ export interface JobResult {
   duration_ms?: number;
   result?: string;
   error?: string;
+  failure_digest?: string;
   reasoning?: ReasoningReport;
   revise_passes?: number;
+  stage_index?: number;
+  stage_results?: StageResult[];
 }
 
 export interface JobState {
@@ -69,6 +87,11 @@ export interface JobState {
   maxRevisePasses: number;
   revisePass: number;
   lastReport?: ReasoningReport;
+  seenBlockerSigs: Set<string>;
+  // --- multi-stage pipeline (optimization O18) ---
+  stages?: StageInput[];
+  stageIndex: number;
+  stageResults: StageResult[];
   // --- git worktree isolation (optimization O8) ---
   worktreeRepo?: string;
   worktreePath?: string;
@@ -92,4 +115,5 @@ export interface StartJobInput {
   reasoning?: boolean;
   auto_revise?: boolean;
   max_revise_passes?: number;
+  stages?: StageInput[];
 }

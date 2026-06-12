@@ -44,6 +44,8 @@ export const LOG_LINE_MAX = readIntegerEnv("LOG_LINE_MAX", 20000, 1000, 200000);
 export const RAW_STREAM_MAX = readIntegerEnv("RAW_STREAM_MAX_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024);
 export const DIFF_MAX_BYTES = readIntegerEnv("DIFF_MAX_BYTES", 200_000, 10_000, 5 * 1024 * 1024);
 export const CHECK_OUTPUT_MAX = readIntegerEnv("CHECK_OUTPUT_MAX", 20_000, 1_000, 200_000);
+export const CHECK_OUTPUT_RESPONSE_MAX = readIntegerEnv("CHECK_OUTPUT_RESPONSE_MAX", 2_000, 200, 200_000);
+export const FAILURE_DIGEST_ENABLED = readBooleanEnv("WORKER_FAILURE_DIGEST", false);
 export const CHECK_TIMEOUT_MS = readIntegerEnv("CHECK_TIMEOUT_MS", 10 * 60 * 1000, 1_000, 60 * 60 * 1000);
 export const JOB_TTL_MS = readIntegerEnv("JOB_TTL_MS", 10 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
 export const WAIT_DEFAULT_MS = readIntegerEnv("WAIT_DEFAULT_MS", 30 * 60 * 1000, 1_000, 6 * 60 * 60 * 1000);
@@ -51,6 +53,7 @@ export const WAIT_MAX_MS = readIntegerEnv("WAIT_MAX_MS", 6 * 60 * 60 * 1000, 1_0
 export const MAX_RUNNING_JOBS = readIntegerEnv("MAX_RUNNING_JOBS", 4, 1, 100);
 export const MAX_STORED_JOBS = readIntegerEnv("MAX_STORED_JOBS", 100, 10, 10000);
 export const DEFAULT_PERMISSION_MODE = process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
+export const INCLUDE_DIFF_DEFAULT = readBooleanEnv("INCLUDE_DIFF_DEFAULT", true);
 
 // --- Mythos-style deterministic reasoning layer ---
 // MYTHOS_REASONING: attach the deterministic reasoning report to every job.
@@ -58,7 +61,7 @@ export const DEFAULT_PERMISSION_MODE = process.env.CLAUDE_PERMISSION_MODE || "ac
 // MYTHOS_MAX_REVISE_PASSES: upper bound on automatic revise passes (0-4).
 export const REASONING_ENABLED = readBooleanEnv("MYTHOS_REASONING", true);
 export const AUTO_REVISE_ENABLED = readBooleanEnv("MYTHOS_AUTO_REVISE", true);
-export const MAX_REVISE_PASSES = readIntegerEnv("MYTHOS_MAX_REVISE_PASSES", 1, 0, 4);
+export const MAX_REVISE_PASSES = readIntegerEnv("MYTHOS_MAX_REVISE_PASSES", 2, 0, 4);
 
 export function getModelName(explicit?: unknown): string {
   const candidate =

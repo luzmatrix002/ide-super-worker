@@ -91,12 +91,14 @@ Use it when you want Codex to stay sharp instead of stuffed:
 
 | Tool | Purpose |
 | --- | --- |
-| `start` | Start an async Claude Code job in an allowed directory. |
-| `get` | Read current job status and structured result. |
+| `start` | Start an async Claude Code job in an allowed directory. Supports optional sequential `stages`. |
+| `get` | Read current job status and compact structured result; pass `verbose:true` for the full legacy payload. |
 | `tail` | Read recent worker logs. |
-| `wait` | Wait for completion without killing the job on timeout. |
+| `wait` | Wait for completion without killing the job on timeout; pass `verbose:true` for the full legacy payload. |
 | `cancel` | Kill a running job process tree. |
-| `analyze` | Read-only cheap-model analysis for selected files. |
+| `analyze` | Read-only cheap-model analysis for selected files or bounded globs. |
+| `review` | Cheap-model review of a job diff/checks or selected files, returning a structured verdict. |
+| `search` | Zero-LLM bounded repository search using `rg` when available. |
 
 ## Quick Start
 
@@ -175,7 +177,11 @@ This project stacks several cost controls:
 
 - `include_diff:false` reduces high-cost Codex ingestion.
 - `DIFF_MAX_BYTES` caps patch payloads.
+- `INCLUDE_DIFF_DEFAULT=0` makes omitted `include_diff` behave like `false`.
+- `CHECK_OUTPUT_RESPONSE_MAX` keeps failed check output compact in `get`/`wait` responses while `tail` retains fuller logs.
 - `analyze` skips Claude Code for read-only summaries.
+- `search` handles symbol/file discovery without any LLM call.
+- `review` and `WORKER_FAILURE_DIGEST=1` move diff review and failure diagnosis to the cheaper gateway.
 - `WORKER_METRICS_FILE` records real gateway token usage.
 - `WORKER_ESCALATE_MODEL` upgrades only failed, difficult revise passes.
 - `WORKER_ISOLATION=worktree` allows safe parallel work in one repo.
@@ -205,7 +211,10 @@ For best results:
 | `CLAUDE_CODE_MODEL` | Model name passed to Claude Code for local validation, usually `sonnet`. |
 | `USE_OPENAI_ADAPTER` | `1` to use the local Anthropic-to-OpenAI adapter. |
 | `DIFF_MAX_BYTES` | Maximum returned diff size. |
+| `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
+| `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |
 | `WORKER_METRICS_FILE` | Optional JSONL path for token usage metrics. |
+| `WORKER_FAILURE_DIGEST` | Set `1` to generate a cheap-gateway diagnosis on failed jobs. |
 | `WORKER_ESCALATE_MODEL` | Optional stronger model for hard revise passes. |
 | `WORKER_ISOLATION` | Set to `worktree` for per-job git worktree isolation. |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` | Optional fallback gateway. |

@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 *.log
+*.jsonl
 *.tgz
 *.zip
 *.rar

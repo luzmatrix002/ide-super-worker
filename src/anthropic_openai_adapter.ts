@@ -9,7 +9,7 @@ import {
   getGatewayBaseUrl,
   getModelName
 } from "./config.js";
-import { appendMetrics } from "./metrics.js";
+import { appendMetrics, pickCacheTokens } from "./metrics.js";
 import { redactSecrets } from "./redact.js";
 
 interface AdapterHandle {
@@ -653,7 +653,7 @@ async function handleMessages(req: http.IncomingMessage, res: http.ServerRespons
     model: data.model || openAIRequest.model,
     prompt_tokens: data.usage?.prompt_tokens ?? 0,
     completion_tokens: data.usage?.completion_tokens ?? 0,
-    cache_hit_tokens: data.usage?.prompt_cache_hit_tokens ?? null,
+    cache_hit_tokens: pickCacheTokens(data.usage),
     cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null
   });
 

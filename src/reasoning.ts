@@ -478,7 +478,7 @@ export function assess(s: JobSignals, options: AssessOptions = {}): ReasoningRep
 }
 
 /** Compose the critique-driven prompt block for an automatic revise pass. */
-export function buildRevisePrompt(originalPrompt: string, report: ReasoningReport, pass: number): string {
+export function buildRevisePrompt(originalPrompt: string, report: ReasoningReport, pass: number, evidence?: string): string {
   const lines: string[] = [
     originalPrompt.trim(),
     "",
@@ -493,6 +493,9 @@ export function buildRevisePrompt(originalPrompt: string, report: ReasoningRepor
     for (const r of report.risks.slice(0, 6)) {
       lines.push(`- [${r.severity}] ${r.detail}`);
     }
+  }
+  if (evidence?.trim()) {
+    lines.push("", "Evidence from the failing run:", evidence.trim());
   }
   lines.push("", "Re-run the relevant checks yourself before finishing.");
   return lines.join("\n");

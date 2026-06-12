@@ -11,11 +11,23 @@ import * as fs from "node:fs";
 // Enabled only when WORKER_METRICS_FILE is set. Failures are swallowed so that
 // observability can never break the main request path.
 export function appendMetrics(row: Record<string, unknown>): void {
-  const file = process.env.WORKER_METRICS_FILE;
+  const baseFile = process.env.WORKER_METRICS_FILE;
+  const file = baseFile && process.env.WORKER_METRICS_SHARD_BY_PID === "1" ? `${baseFile}.${process.pid}` : baseFile;
   if (!file) return;
   try {
     fs.appendFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), ...row })}\n`);
   } catch {
     // observability must never throw
   }
+}
+
+
+/** Different gateways expose prompt-cache hits under different usage keys. */
+export function pickCacheTokens(usage: any): number | null {
+  return (
+    usage?.prompt_cache_hit_tokens ??
+    usage?.prompt_tokens_details?.cached_tokens ??
+    usage?.cache_read_input_tokens ??
+    null
+  );
 }

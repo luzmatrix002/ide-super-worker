@@ -10,7 +10,7 @@ import {
   getGatewayBaseUrl,
   getModelName
 } from "./config.js";
-import { appendMetrics } from "./metrics.js";
+import { appendMetrics, pickCacheTokens } from "./metrics.js";
 import { redactSecrets } from "./redact.js";
 import { isInsideDirectory } from "./security.js";
 
@@ -19,6 +19,8 @@ import { isInsideDirectory } from "./security.js";
 // cutting two hops for summarize/explain/classify tasks. It never edits files.
 
 const FILE_MAX_BYTES = 200_000;
+const ANALYZE_GLOB_MAX_FILES = 20;
+const ANALYZE_GLOB_MAX_BYTES = FILE_MAX_BYTES * 2;
 
 interface LiteTarget {
   baseUrl: string;
@@ -69,13 +71,76 @@ function readSandboxedFile(input: string): string {
   return buffer.toString("utf8");
 }
 
-export async function analyzeDirect(prompt: string, files: string[] = [], maxTokens?: number): Promise<string> {
-  const parts: string[] = [prompt.trim()];
-  for (const file of files) {
-    parts.push(`\n# FILE: ${file}\n${readSandboxedFile(file)}`);
-  }
-  const content = parts.join("\n");
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
 
+function globToRegExp(pattern: string): RegExp {
+  const normalized = pattern.replace(/\\/g, "/");
+  let out = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    const next = normalized[index + 1];
+    if (char === "*" && next === "*") {
+      out += ".*";
+      index += 1;
+    } else if (char === "*") {
+      out += "[^/]*";
+    } else if (char === "?") {
+      out += "[^/]";
+    } else {
+      out += escapeRegExp(char);
+    }
+  }
+  return new RegExp(`${out}$`, "i");
+}
+
+function walkFiles(dir: string, out: string[]): void {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkFiles(full, out);
+    } else if (entry.isFile()) {
+      out.push(full);
+    }
+  }
+}
+
+function expandFiles(files: string[]): string[] {
+  const expanded: string[] = [];
+  const allFiles: string[] = [];
+
+  for (const item of files) {
+    if (!/[*?]/.test(item)) {
+      expanded.push(item);
+      continue;
+    }
+    if (path.isAbsolute(item) && !isInsideDirectory(path.resolve(item), SANDBOX_ROOT)) {
+      throw new Error(`[Security] glob escapes SANDBOX_ROOT: ${item}`);
+    }
+    if (allFiles.length === 0) walkFiles(SANDBOX_ROOT, allFiles);
+    const absolutePattern = path.resolve(SANDBOX_ROOT, item).replace(/\\/g, "/");
+    const relativePattern = item.replace(/\\/g, "/").replace(/^\.?\//, "");
+    const absoluteRe = globToRegExp(absolutePattern);
+    const relativeRe = globToRegExp(relativePattern);
+    for (const file of allFiles) {
+      const normalized = file.replace(/\\/g, "/");
+      const relative = path.relative(SANDBOX_ROOT, file).replace(/\\/g, "/");
+      if (absoluteRe.test(normalized) || relativeRe.test(relative)) {
+        expanded.push(file);
+      }
+    }
+  }
+
+  const unique = [...new Set(expanded)].sort((a, b) => a.localeCompare(b));
+  if (unique.length > ANALYZE_GLOB_MAX_FILES) {
+    throw new Error(`analyze glob matched ${unique.length} files; narrow it to ${ANALYZE_GLOB_MAX_FILES} or fewer`);
+  }
+  return unique;
+}
+
+async function callLiteCompletion(content: string, maxTokens: number, tool: string): Promise<string> {
   let lastError: unknown;
   for (const target of liteTargets()) {
     try {
@@ -88,7 +153,7 @@ export async function analyzeDirect(prompt: string, files: string[] = [], maxTok
         body: JSON.stringify({
           model: target.model,
           messages: [{ role: "user", content }],
-          max_tokens: maxTokens && maxTokens > 0 ? Math.trunc(maxTokens) : 1024,
+          max_tokens: maxTokens,
           stream: false
         })
       });
@@ -101,11 +166,12 @@ export async function analyzeDirect(prompt: string, files: string[] = [], maxTok
       const data = await response.json();
       appendMetrics({
         route: target.label,
-        tool: "analyze",
+        tool,
         model: data.model || target.model,
         prompt_tokens: data.usage?.prompt_tokens ?? 0,
         completion_tokens: data.usage?.completion_tokens ?? 0,
-        cache_hit_tokens: data.usage?.prompt_cache_hit_tokens ?? null
+        cache_hit_tokens: pickCacheTokens(data.usage),
+        cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null
       });
 
       const answer = data.choices?.[0]?.message?.content;
@@ -115,5 +181,66 @@ export async function analyzeDirect(prompt: string, files: string[] = [], maxTok
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error("analyze failed on all upstreams");
+  throw lastError instanceof Error ? lastError : new Error(`${tool} failed on all upstreams`);
+}
+
+export async function analyzeDirect(prompt: string, files: string[] = [], maxTokens?: number): Promise<string> {
+  const expandedFiles = expandFiles(files);
+  const fileParts: string[] = [];
+  let totalBytes = 0;
+  for (const file of expandedFiles) {
+    const content = readSandboxedFile(file);
+    totalBytes += Buffer.byteLength(content, "utf8");
+    if (totalBytes > ANALYZE_GLOB_MAX_BYTES) {
+      throw new Error(`analyze files exceed ${ANALYZE_GLOB_MAX_BYTES} bytes after expansion; narrow the file list`);
+    }
+    fileParts.push(`\n# FILE: ${file}\n${content}`);
+  }
+  const content = [
+    "You are a read-only code analyst. Answer concisely based only on the files below.",
+    ...fileParts,
+    `\n# QUESTION\n${prompt.trim()}`
+  ].join("\n");
+
+  return callLiteCompletion(content, maxTokens && maxTokens > 0 ? Math.trunc(maxTokens) : 1024, "analyze");
+}
+
+export async function digestFailure(input: {
+  task: string;
+  changedFiles: string[];
+  checks: string[];
+  errors: string[];
+  blockers: string[];
+}): Promise<string> {
+  const content = [
+    "Summarize this failed worker job for Codex. Return at most 5 concise lines: likely root cause, key evidence, and next action.",
+    `\n# TASK\n${input.task}`,
+    `\n# CHANGED FILES\n${input.changedFiles.join("\n") || "(none)"}`,
+    `\n# BLOCKERS\n${input.blockers.join("\n") || "(none)"}`,
+    `\n# CHECK OUTPUT\n${input.checks.join("\n\n").slice(0, 20_000) || "(none)"}`,
+    `\n# ERROR LINES\n${input.errors.slice(-80).join("\n") || "(none)"}`
+  ].join("\n");
+  return callLiteCompletion(content, 700, "failure_digest");
+}
+
+export async function reviewDirect(input: {
+  diff?: string;
+  checks?: string[];
+  files?: string[];
+  focus?: string;
+  maxTokens?: number;
+}): Promise<string> {
+  const fileParts: string[] = [];
+  for (const file of expandFiles(input.files || [])) {
+    fileParts.push(`\n# FILE: ${file}\n${readSandboxedFile(file)}`);
+  }
+  const content = [
+    "Review the provided diff or files. Return ONLY JSON with this shape:",
+    '{"verdict":"approve|needs_changes|risky","issues":[{"file":"path","line":1,"severity":"low|medium|high","note":"short"}],"summary":"short"}',
+    input.focus ? `\n# FOCUS\n${input.focus}` : "",
+    input.diff ? `\n# DIFF\n${input.diff}` : "",
+    input.checks?.length ? `\n# CHECKS\n${input.checks.join("\n\n")}` : "",
+    ...fileParts
+  ].join("\n");
+  return callLiteCompletion(content, input.maxTokens && input.maxTokens > 0 ? Math.trunc(input.maxTokens) : 800, "review");
 }

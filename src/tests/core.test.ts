@@ -20,6 +20,11 @@ const claude = await import("../claude.js");
 const workspace = await import("../workspace.js");
 const adapter = await import("../anthropic_openai_adapter.js");
 const server = await import("../server.js");
+const lite = await import("../lite.js");
+const reasoning = await import("../reasoning.js");
+const search = await import("../search.js");
+const metrics = await import("../metrics.js");
+const originalFetch = globalThis.fetch;
 
 function expectRejectsPath(input: string): void {
   assert.throws(() => security.validatePath(input), /Security/);
@@ -41,6 +46,7 @@ try {
 }
 
 fs.mkdirSync(path.join(project, "src"));
+fs.writeFileSync(path.join(project, "src", "needle.txt"), "alpha\nneedle here\n", "utf8");
 const scoped = security.validateScopedPatch({ paths: ["src"] }, project);
 assert.deepEqual(scoped?.relativePaths, ["src"]);
 assert.throws(() => security.validateScopedPatch({ paths: [".."] }, project), /Security/);
@@ -74,9 +80,75 @@ const diffJob = jobsModule.createJobState("job-diff", "claude", [], project, "te
   maxRevisePasses: 0
 });
 diffJob.result.diff = "large diff";
+diffJob.result.checks = [`unit: failed\n${"x".repeat(3000)}`];
+diffJob.result.result = "worker summary";
+diffJob.result.session_id = "session-1";
+diffJob.result.total_cost_usd = 0.01;
 const publicDiffJob = server.publicJob(diffJob);
 assert.equal(publicDiffJob.diff, "");
-assert.equal(publicDiffJob.result.diff, "");
+assert.equal("result" in publicDiffJob, false);
+assert(publicDiffJob.checks[0].includes("response output truncated"));
+assert.equal(publicDiffJob.summary, "worker summary");
+assert.equal(publicDiffJob.session_id, "session-1");
+assert.equal(publicDiffJob.total_cost_usd, 0.01);
+const verboseDiffJob = server.publicJob(diffJob, undefined, true) as any;
+assert.equal(verboseDiffJob.result.diff, "");
+assert.equal(verboseDiffJob.checks[0], diffJob.result.checks[0]);
+assert.equal(metrics.pickCacheTokens({ prompt_tokens_details: { cached_tokens: 12 } }), 12);
+assert.equal(metrics.pickCacheTokens({ cache_read_input_tokens: 7 }), 7);
+
+const searchResult = search.searchWorkspace({ pattern: "needle", dirs: [project], glob: "*.txt" });
+assert.equal(searchResult.mode, "lines");
+assert(searchResult.results.some((line) => line.includes("needle.txt")));
+const dashSearchResult = search.searchWorkspace({ pattern: "-needle", dirs: [project], glob: "*.txt" });
+assert.equal(dashSearchResult.mode, "lines");
+
+let capturedAnalyzeBody = "";
+globalThis.fetch = (async (_url: any, init: any) => {
+  capturedAnalyzeBody = String(init.body);
+  return new Response(
+    JSON.stringify({
+      model: "lite-test",
+      usage: { prompt_tokens: 10, completion_tokens: 2, prompt_cache_hit_tokens: 3, prompt_cache_miss_tokens: 7 },
+      choices: [{ message: { content: "analysis ok" } }]
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}) as typeof fetch;
+try {
+  const answer = await lite.analyzeDirect("Where is the needle?", [path.join(project, "src", "*.txt")], 64);
+  assert.equal(answer, "analysis ok");
+  const request = JSON.parse(capturedAnalyzeBody);
+  const content = request.messages[0].content;
+  assert(content.indexOf("# FILE:") < content.indexOf("# QUESTION"));
+  assert(content.includes("needle here"));
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+const revisePrompt = reasoning.buildRevisePrompt(
+  "Fix it",
+  {
+    enabled: true,
+    decision: "revise",
+    ready: false,
+    belief: 0.1,
+    difficulty: 0.5,
+    halted_reason: "stalled",
+    blockers: ["1 failing check"],
+    risks: [{ kind: "failing_check", detail: "check unit failed", severity: "high" }],
+    unknowns: [],
+    evidence: [],
+    calibration: { stated_success: 0.1, evidence_confidence: 0.1, calibration_gap: 0, overconfident: false },
+    required_changes: ["Make unit pass."],
+    recommended_checks: [],
+    should_revise: true,
+    depth_trace: []
+  },
+  1,
+  "unit failed with stack trace"
+);
+assert(revisePrompt.includes("Evidence from the failing run"));
 
 const plan = claude.buildClaudeLaunchPlan(
   {
@@ -128,7 +200,6 @@ assert(summary.changed_files.includes("src/b.txt"));
 assert(summary.diff.includes("new"));
 assert(summary.diff.includes("created"));
 
-const originalFetch = globalThis.fetch;
 let attempts = 0;
 globalThis.fetch = (async () => {
   attempts += 1;

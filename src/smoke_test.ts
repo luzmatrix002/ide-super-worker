@@ -21,7 +21,7 @@ async function main(): Promise<void> {
 
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
-  const expected = ["analyze", "cancel", "get", "start", "tail", "wait"];
+  const expected = ["analyze", "cancel", "get", "review", "search", "start", "tail", "wait"];
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
     throw new Error(`Unexpected tools: ${names.join(", ")}`);
   }
