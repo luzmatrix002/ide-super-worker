@@ -1,5 +1,27 @@
 # Promotion Kit
 
+## Latest Release Angle
+
+MCP Codex Worker 2.4.0 is now focused on one practical promise: keep Codex on the high-value planning and review path, and push bulky code-reading, repair, checks, review, and failure diagnosis into a cheaper worker lane.
+
+The current build adds:
+
+- Default compact worker results, with diffs opt-in instead of automatic.
+- Cheap read-only `analyze`, zero-LLM `search`, and gateway-backed `review`.
+- JSONL metrics plus `npm run stats` for real route/model token accounting.
+- Primary/fallback gateway routing with official Anthropic fallback disabled unless explicitly allowed.
+- Bounded check output, failure digests, cache-friendly prompts, and controlled revise escalation.
+- Optional worktree isolation for parallel jobs.
+
+Sanitized live acceptance snapshot:
+
+- Build, core tests, smoke tests, and network doctor passed.
+- Primary and fallback gateways were reachable.
+- Real analyze calls were accepted by the configured primary model.
+- Fallback analyze succeeded when the primary key was intentionally invalid.
+- Packet capture during live analyze traffic showed primary-gateway packets and zero official Anthropic packet events.
+- Metrics landed in the configured JSONL file and `npm run stats` aggregated them without extra arguments.
+
 ## One-Liner
 
 Make Codex stop eating giant diffs: delegate heavy code work to a cheaper async worker and return only compact, verified results.
