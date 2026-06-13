@@ -13,6 +13,8 @@ process.env.SANDBOX_ROOT = root;
 process.env.ONEAPI_BASE_URL = "https://gateway.example.test/v1";
 process.env.ONEAPI_API_KEY = "unit-test-api-key";
 process.env.CLAUDE_CODE_MODEL = "sonnet";
+process.env.WORKER_LITE_MODEL = "lite-env-model";
+process.env.WORKER_LITE_CACHE_DIR = path.join(root, "lite-cache");
 
 const security = await import("../security.js");
 const jobsModule = await import("../jobs.js");
@@ -172,7 +174,11 @@ const dashSearchResult = search.searchWorkspace({ pattern: "-needle", dirs: [pro
 assert.equal(dashSearchResult.mode, "lines");
 
 let capturedAnalyzeBody = "";
+let analyzeFetchCount = 0;
+const liteMetricsFile = path.join(root, "lite-metrics.jsonl");
+process.env.WORKER_METRICS_FILE = liteMetricsFile;
 globalThis.fetch = (async (_url: any, init: any) => {
+  analyzeFetchCount += 1;
   capturedAnalyzeBody = String(init.body);
   return new Response(
     JSON.stringify({
@@ -187,12 +193,36 @@ try {
   const answer = await lite.analyzeDirect("Where is the needle?", [path.join(project, "src", "*.txt")], 64);
   assert.equal(answer, "analysis ok");
   const request = JSON.parse(capturedAnalyzeBody);
+  assert.equal(request.model, "lite-env-model");
   const content = request.messages[0].content;
   assert(content.indexOf("# FILE:") < content.indexOf("# QUESTION"));
   assert(content.includes("needle here"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const cachedAnswer = await lite.analyzeDirect("Where is the needle?", [path.join(project, "src", "*.txt")], 64);
+  assert.equal(cachedAnswer, "analysis ok");
+  assert.equal(analyzeFetchCount, 1);
+  const liteMetricRows = fs.readFileSync(liteMetricsFile, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert(liteMetricRows.some((row) => row.route === "cache" && row.tool === "analyze" && row.model === "(cached)"));
 } finally {
   globalThis.fetch = originalFetch;
+  delete process.env.WORKER_METRICS_FILE;
 }
+
+const invalidCacheDirRun = spawnSync(
+  process.execPath,
+  ["--input-type=module", "-e", "await import('./dist/lite.js')"],
+  {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      SANDBOX_ROOT: root,
+      WORKER_LITE_CACHE_DIR: outside
+    }
+  }
+);
+assert.notEqual(invalidCacheDirRun.status, 0);
+assert((invalidCacheDirRun.stderr + invalidCacheDirRun.stdout).includes("WORKER_LITE_CACHE_DIR must be inside SANDBOX_ROOT"));
 
 const revisePrompt = reasoning.buildRevisePrompt(
   "Fix it",

@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import {
+  LITE_CACHE_DIR,
+  LITE_CACHE_TTL_MS,
+  LITE_MODEL,
   SANDBOX_ROOT,
   fallbackConfigured,
   getFallbackApiKey,
@@ -31,9 +35,10 @@ interface LiteTarget {
 
 function liteTargets(): LiteTarget[] {
   const targets: LiteTarget[] = [];
+  const model = LITE_MODEL || getModelName();
   const primaryBase = getGatewayBaseUrl();
   if (primaryBase) {
-    targets.push({ baseUrl: primaryBase.replace(/\/+$/, ""), apiKey: getGatewayApiKey(), model: getModelName(), label: "primary" });
+    targets.push({ baseUrl: primaryBase.replace(/\/+$/, ""), apiKey: getGatewayApiKey(), model, label: "primary" });
   }
   if (fallbackConfigured()) {
     targets.push({
@@ -47,6 +52,16 @@ function liteTargets(): LiteTarget[] {
     throw new Error("analyze requires ONEAPI_BASE_URL/ANTHROPIC_BASE_URL (or a configured fallback)");
   }
   return targets;
+}
+
+function liteCacheDir(): string | undefined {
+  if (!LITE_CACHE_DIR) return undefined;
+  const resolved = path.resolve(LITE_CACHE_DIR);
+  if (!isInsideDirectory(resolved, SANDBOX_ROOT)) {
+    throw new Error("WORKER_LITE_CACHE_DIR must be inside SANDBOX_ROOT");
+  }
+  fs.mkdirSync(resolved, { recursive: true });
+  return resolved;
 }
 
 /** Read a file only if it resolves inside SANDBOX_ROOT; truncated to a safe size. */
@@ -140,7 +155,35 @@ function expandFiles(files: string[]): string[] {
   return unique;
 }
 
+function cacheKey(tool: string, content: string): string {
+  return createHash("sha256").update(`${tool}:${content}`).digest("hex").slice(0, 32);
+}
+
+function readCachedAnswer(tool: string, content: string): string | undefined {
+  const dir = liteCacheDir();
+  if (!dir || LITE_CACHE_TTL_MS <= 0) return undefined;
+  const key = cacheKey(tool, content);
+  const file = path.join(dir, `${key}.json`);
+  try {
+    const cached = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Date.now() - Number(cached.ts) > LITE_CACHE_TTL_MS || typeof cached.answer !== "string") return undefined;
+    appendMetrics({ route: "cache", tool, model: "(cached)", prompt_tokens: 0, completion_tokens: 0 });
+    return cached.answer;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedAnswer(tool: string, content: string, answer: string): void {
+  const dir = liteCacheDir();
+  if (!dir || LITE_CACHE_TTL_MS <= 0) return;
+  const file = path.join(dir, `${cacheKey(tool, content)}.json`);
+  fs.promises.writeFile(file, JSON.stringify({ ts: Date.now(), answer }), "utf8").catch(() => undefined);
+}
+
 async function callLiteCompletion(content: string, maxTokens: number, tool: string): Promise<string> {
+  const cached = readCachedAnswer(tool, content);
+  if (cached !== undefined) return cached;
   let lastError: unknown;
   for (const target of liteTargets()) {
     try {
@@ -175,7 +218,9 @@ async function callLiteCompletion(content: string, maxTokens: number, tool: stri
       });
 
       const answer = data.choices?.[0]?.message?.content;
-      return redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
+      const redacted = redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
+      writeCachedAnswer(tool, content, redacted);
+      return redacted;
     } catch (error) {
       lastError = error;
     }

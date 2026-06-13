@@ -21,6 +21,11 @@ function readIntegerEnv(name: string, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
+function isInsideDirectory(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function realDirectory(candidate: string, label: string): string {
   const resolved = path.resolve(candidate);
   let realPath: string;
@@ -39,6 +44,16 @@ function realDirectory(candidate: string, label: string): string {
 
 export const SANDBOX_ROOT = realDirectory(process.env.SANDBOX_ROOT || process.cwd(), "SANDBOX_ROOT");
 
+function readLiteCacheDir(): string | undefined {
+  const raw = process.env.WORKER_LITE_CACHE_DIR?.trim();
+  if (!raw) return undefined;
+  const resolved = path.resolve(raw);
+  if (!isInsideDirectory(resolved, SANDBOX_ROOT)) {
+    throw new Error("WORKER_LITE_CACHE_DIR must be inside SANDBOX_ROOT");
+  }
+  return resolved;
+}
+
 export const LOG_BUFFER_MAX = readIntegerEnv("LOG_BUFFER_MAX", 2000, 100, 100000);
 export const LOG_LINE_MAX = readIntegerEnv("LOG_LINE_MAX", 20000, 1000, 200000);
 export const RAW_STREAM_MAX = readIntegerEnv("RAW_STREAM_MAX_BYTES", 5 * 1024 * 1024, 64 * 1024, 50 * 1024 * 1024);
@@ -46,6 +61,9 @@ export const DIFF_MAX_BYTES = readIntegerEnv("DIFF_MAX_BYTES", 200_000, 10_000, 
 export const CHECK_OUTPUT_MAX = readIntegerEnv("CHECK_OUTPUT_MAX", 20_000, 1_000, 200_000);
 export const CHECK_OUTPUT_RESPONSE_MAX = readIntegerEnv("CHECK_OUTPUT_RESPONSE_MAX", 2_000, 200, 200_000);
 export const FAILURE_DIGEST_ENABLED = readBooleanEnv("WORKER_FAILURE_DIGEST", false);
+export const LITE_MODEL = (process.env.WORKER_LITE_MODEL || "").trim();
+export const LITE_CACHE_DIR = readLiteCacheDir();
+export const LITE_CACHE_TTL_MS = readIntegerEnv("WORKER_LITE_CACHE_TTL_MS", 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
 export const CHECK_TIMEOUT_MS = readIntegerEnv("CHECK_TIMEOUT_MS", 10 * 60 * 1000, 1_000, 60 * 60 * 1000);
 export const JOB_TTL_MS = readIntegerEnv("JOB_TTL_MS", 10 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
 export const WAIT_DEFAULT_MS = readIntegerEnv("WAIT_DEFAULT_MS", 30 * 60 * 1000, 1_000, 6 * 60 * 60 * 1000);
