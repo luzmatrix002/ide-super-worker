@@ -97,6 +97,53 @@ assert.equal(verboseDiffJob.checks[0], diffJob.result.checks[0]);
 assert.equal(metrics.pickCacheTokens({ prompt_tokens_details: { cached_tokens: 12 } }), 12);
 assert.equal(metrics.pickCacheTokens({ cache_read_input_tokens: 7 }), 7);
 
+const statsFile = path.join(root, "metrics.jsonl");
+fs.writeFileSync(
+  statsFile,
+  [
+    JSON.stringify({
+      route: "primary",
+      tool: "analyze",
+      model: "lite-test",
+      prompt_tokens: 1000,
+      completion_tokens: 500,
+      cache_hit_tokens: 100,
+      cache_miss_tokens: 900
+    }),
+    JSON.stringify({
+      route: "fallback",
+      tool: "adapter",
+      model: "fallback-test",
+      prompt_tokens: 2000,
+      completion_tokens: 1000
+    }),
+    JSON.stringify({
+      route: "primary",
+      tool: "adapter",
+      model: "deepseek-v4-pro",
+      prompt_tokens: 1000,
+      completion_tokens: 0
+    })
+  ].join("\n"),
+  "utf8"
+);
+const statsRun = spawnSync(process.execPath, ["scripts/stats.mjs", statsFile], {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    WORKER_PRICE_INPUT: "1",
+    WORKER_PRICE_OUTPUT: "2",
+    WORKER_PRICE_CACHE: "0.1"
+  }
+});
+assert.equal(statsRun.status, 0, statsRun.stderr);
+assert(statsRun.stdout.includes("cost_usd"));
+assert(statsRun.stdout.includes("0.001910"));
+assert(statsRun.stdout.includes("fallback_ratio\t33.3%"));
+assert(statsRun.stdout.includes("escalate_calls\t1"));
+assert(statsRun.stderr.includes("[warn] fallback ratio 33.3% exceeds 10%"));
+
 const searchResult = search.searchWorkspace({ pattern: "needle", dirs: [project], glob: "*.txt" });
 assert.equal(searchResult.mode, "lines");
 assert(searchResult.results.some((line) => line.includes("needle.txt")));

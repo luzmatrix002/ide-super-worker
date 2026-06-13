@@ -17,6 +17,53 @@ function loadDotEnv(file = path.resolve(process.cwd(), ".env")) {
 loadDotEnv();
 
 const file = process.argv[2] || process.env.WORKER_METRICS_FILE;
+const TOKENS_PER_PRICE_UNIT = 1_000_000;
+
+const numberEnv = (name) => {
+  const value = Number(process.env[name]);
+  return process.env[name] === undefined || process.env[name] === "" || !Number.isFinite(value) ? undefined : value;
+};
+const defaultInputPrice = numberEnv("WORKER_PRICE_INPUT");
+const defaultOutputPrice = numberEnv("WORKER_PRICE_OUTPUT");
+const defaultCachePrice = numberEnv("WORKER_PRICE_CACHE") ?? (defaultInputPrice === undefined ? undefined : defaultInputPrice * 0.1);
+let priceTable = {};
+try {
+  priceTable = process.env.WORKER_PRICE_TABLE ? JSON.parse(process.env.WORKER_PRICE_TABLE) : {};
+} catch {
+  console.error("[warn] WORKER_PRICE_TABLE is not valid JSON; model overrides ignored");
+}
+const warnedModels = new Set();
+
+function priceForModel(model) {
+  const override = priceTable[model] && typeof priceTable[model] === "object" ? priceTable[model] : {};
+  const input = override.input === undefined ? defaultInputPrice : Number(override.input);
+  const output = override.output === undefined ? defaultOutputPrice : Number(override.output);
+  const cache = override.cache === undefined ? defaultCachePrice ?? (Number.isFinite(input) ? input * 0.1 : undefined) : Number(override.cache);
+  if (!Number.isFinite(input) || !Number.isFinite(output)) {
+    if (!warnedModels.has(model)) {
+      console.error(`[warn] no price for ${model}, cost_usd omitted`);
+      warnedModels.add(model);
+    }
+    return undefined;
+  }
+  return { input, output, cache: Number.isFinite(cache) ? cache : input * 0.1 };
+}
+
+function costForGroup(group) {
+  const price = priceForModel(group.model);
+  if (!price) return undefined;
+  const cachedInput = group.cacheHit;
+  const regularInput = group.cacheMiss > 0 ? group.cacheMiss : Math.max(group.prompt - cachedInput, 0);
+  return (regularInput * price.input + cachedInput * price.cache + group.completion * price.output) / TOKENS_PER_PRICE_UNIT;
+}
+
+function formatUsd(value) {
+  return value === undefined ? "n/a" : value.toFixed(6);
+}
+
+function formatPct(value) {
+  return value === undefined ? "n/a" : `${value.toFixed(1)}%`;
+}
 
 if (!file) {
   console.error("Usage: npm run stats -- <metrics.jsonl> or set WORKER_METRICS_FILE");
@@ -76,9 +123,15 @@ for (const metricFile of metricFiles) {
 
 const totals = { calls: 0, prompt: 0, completion: 0, cacheHit: 0, cacheMiss: 0 };
 const data = Array.from(groups.values()).sort((a, b) => b.prompt + b.completion - (a.prompt + a.completion));
+let knownCostTotal = 0;
+
+for (const group of data) {
+  group.cost = costForGroup(group);
+  if (group.cost !== undefined) knownCostTotal += group.cost;
+}
 
 console.log(`Rows: ${rows}`);
-console.log("route\ttool\tmodel\tcalls\tprompt\tcompletion\tcache_hit\tcache_miss\tcache_hit_rate");
+console.log("route\ttool\tmodel\tcalls\tprompt\tcompletion\tcache_hit\tcache_miss\tcache_hit_rate\tcost_usd\tcost_pct");
 for (const group of data) {
   totals.calls += group.calls;
   totals.prompt += group.prompt;
@@ -97,7 +150,9 @@ for (const group of data) {
       group.completion,
       group.cacheHit,
       group.cacheMiss,
-      cacheRate
+      cacheRate,
+      formatUsd(group.cost),
+      formatPct(group.cost !== undefined && knownCostTotal > 0 ? (group.cost / knownCostTotal) * 100 : undefined)
     ].join("\t")
   );
 }
@@ -114,6 +169,22 @@ console.log(
     totals.completion,
     totals.cacheHit,
     totals.cacheMiss,
-    totalRate
+    totalRate,
+    formatUsd(knownCostTotal > 0 ? knownCostTotal : undefined),
+    knownCostTotal > 0 ? "100.0%" : "n/a"
   ].join("\t")
 );
+
+const fallbackCalls = data.filter((group) => group.route === "fallback").reduce((sum, group) => sum + group.calls, 0);
+const fallbackRatio = totals.calls > 0 ? (fallbackCalls / totals.calls) * 100 : 0;
+const escalateCalls = data
+  .filter((group) => group.route === "primary" && /-(pro|plus)(?:$|[-_.])/i.test(group.model))
+  .reduce((sum, group) => sum + group.calls, 0);
+
+console.log(`fallback_ratio\t${fallbackRatio.toFixed(1)}%`);
+console.log(`escalate_calls\t${escalateCalls}`);
+console.log(`cache_hit_rate\t${totalRate}`);
+
+if (fallbackRatio > 10) {
+  console.error(`[warn] fallback ratio ${fallbackRatio.toFixed(1)}% exceeds 10%`);
+}
