@@ -225,6 +225,45 @@ const invalidCacheDirRun = spawnSync(
 assert.notEqual(invalidCacheDirRun.status, 0);
 assert((invalidCacheDirRun.stderr + invalidCacheDirRun.stdout).includes("WORKER_LITE_CACHE_DIR must be inside SANDBOX_ROOT"));
 
+const prefixCacheRun = spawnSync(
+  process.execPath,
+  [
+    "--input-type=module",
+    "-e",
+    `
+const lite = await import("./dist/lite.js");
+const bodies = [];
+globalThis.fetch = async (_url, init) => {
+  bodies.push(JSON.parse(String(init.body)));
+  return new Response(JSON.stringify({ model: "lite-test", usage: {}, choices: [{ message: { content: "ok" } }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" }
+  });
+};
+await lite.analyzeDirect("first question", [process.env.TEST_FILE], 64);
+await lite.analyzeDirect("second question", [process.env.TEST_FILE], 64);
+console.log(JSON.stringify(bodies));
+`
+  ],
+  {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ADAPTER_PREFIX_CACHE: "1",
+      SANDBOX_ROOT: root,
+      TEST_FILE: path.join(project, "src", "needle.txt"),
+      WORKER_LITE_CACHE_DIR: path.join(root, "prefix-cache")
+    }
+  }
+);
+assert.equal(prefixCacheRun.status, 0, prefixCacheRun.stderr);
+const prefixBodies = JSON.parse(prefixCacheRun.stdout);
+assert.equal(prefixBodies[0].system, "You are a read-only code analyst. Answer concisely based only on the files below.");
+assert.equal(prefixBodies[0].messages[0].content, prefixBodies[1].messages[0].content);
+assert.equal(prefixBodies[0].messages[1].role, "assistant");
+assert.notEqual(prefixBodies[0].messages[2].content, prefixBodies[1].messages[2].content);
+
 const reviseReport: ReasoningReport = {
   enabled: true,
   decision: "revise" as const,

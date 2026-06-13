@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import {
+  ADAPTER_PREFIX_CACHE,
   LITE_CACHE_DIR,
   LITE_CACHE_TTL_MS,
   LITE_MODEL,
@@ -31,6 +32,11 @@ interface LiteTarget {
   apiKey?: string;
   model: string;
   label: "primary" | "fallback";
+}
+
+interface LiteRequest {
+  system?: string;
+  messages: Array<{ role: string; content: string }>;
 }
 
 function liteTargets(): LiteTarget[] {
@@ -181,8 +187,10 @@ function writeCachedAnswer(tool: string, content: string, answer: string): void 
   fs.promises.writeFile(file, JSON.stringify({ ts: Date.now(), answer }), "utf8").catch(() => undefined);
 }
 
-async function callLiteCompletion(content: string, maxTokens: number, tool: string): Promise<string> {
-  const cached = readCachedAnswer(tool, content);
+async function callLiteCompletion(request: string | LiteRequest, maxTokens: number, tool: string): Promise<string> {
+  const liteRequest = typeof request === "string" ? { messages: [{ role: "user", content: request }] } : request;
+  const cacheContent = JSON.stringify(liteRequest);
+  const cached = readCachedAnswer(tool, cacheContent);
   if (cached !== undefined) return cached;
   let lastError: unknown;
   for (const target of liteTargets()) {
@@ -195,7 +203,8 @@ async function callLiteCompletion(content: string, maxTokens: number, tool: stri
         },
         body: JSON.stringify({
           model: target.model,
-          messages: [{ role: "user", content }],
+          ...(liteRequest.system ? { system: liteRequest.system } : {}),
+          messages: liteRequest.messages,
           max_tokens: maxTokens,
           stream: false
         })
@@ -219,7 +228,7 @@ async function callLiteCompletion(content: string, maxTokens: number, tool: stri
 
       const answer = data.choices?.[0]?.message?.content;
       const redacted = redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
-      writeCachedAnswer(tool, content, redacted);
+      writeCachedAnswer(tool, cacheContent, redacted);
       return redacted;
     } catch (error) {
       lastError = error;
@@ -240,6 +249,17 @@ export async function analyzeDirect(prompt: string, files: string[] = [], maxTok
       throw new Error(`analyze files exceed ${ANALYZE_GLOB_MAX_BYTES} bytes after expansion; narrow the file list`);
     }
     fileParts.push(`\n# FILE: ${file}\n${content}`);
+  }
+  if (ADAPTER_PREFIX_CACHE) {
+    const request: LiteRequest = {
+      system: "You are a read-only code analyst. Answer concisely based only on the files below.",
+      messages: [
+        { role: "user", content: fileParts.join("\n") || "(no files provided)" },
+        { role: "assistant", content: "Understood. Ready to answer questions about these files." },
+        { role: "user", content: `# QUESTION\n${prompt.trim()}` }
+      ]
+    };
+    return callLiteCompletion(request, maxTokens && maxTokens > 0 ? Math.trunc(maxTokens) : 1024, "analyze");
   }
   const content = [
     "You are a read-only code analyst. Answer concisely based only on the files below.",
