@@ -9,6 +9,7 @@ import { analyzeDirect, digestFailure, reviewDirect } from "./lite.js";
 import {
   AUTO_REVISE_ENABLED,
   CHECK_OUTPUT_RESPONSE_MAX,
+  DIGEST_BEFORE_REVISE,
   FAILURE_DIGEST_ENABLED,
   INCLUDE_DIFF_DEFAULT,
   MAX_REVISE_PASSES,
@@ -484,6 +485,10 @@ async function onClaudeClose(jobId: string, job: JobState, code: number | null, 
         `halted=${report.halted_reason} blockers=[${report.blockers.join("; ")}]`
     );
 
+    if (DIGEST_BEFORE_REVISE) {
+      await maybeDigestFailure(job, evaluation, report);
+    }
+
     const canRevise =
       !job.seenBlockerSigs.has([...report.blockers].sort().join("|")) &&
       job.autoReviseEnabled &&
@@ -494,7 +499,8 @@ async function onClaudeClose(jobId: string, job: JobState, code: number | null, 
 
     if (canRevise) {
       job.revisePass += 1;
-      const revisePrompt = buildRevisePrompt(job.originalPrompt, report, job.revisePass, failureEvidence(evaluation));
+      const reviseEvidence = job.result.failure_digest ?? failureEvidence(evaluation);
+      const revisePrompt = buildRevisePrompt(job.originalPrompt, report, job.revisePass, reviseEvidence);
       // Optimization O6: on a revise pass, if the deterministic difficulty is
       // high and an escalate model is configured, switch this pass to the
       // stronger (pricier) model. First passes always run on the cheap default,
@@ -521,7 +527,9 @@ async function onClaudeClose(jobId: string, job: JobState, code: number | null, 
     }
   }
 
-  await maybeDigestFailure(job, evaluation, report);
+  if (!DIGEST_BEFORE_REVISE) {
+    await maybeDigestFailure(job, evaluation, report);
+  }
 
   if (evaluation.finalStatus === "failed") {
     job.stageResults.push(currentStageResult(job, evaluation));

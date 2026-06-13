@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ReasoningReport } from "../reasoning.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-codex-worker-test-root-"));
 const project = path.join(root, "project");
@@ -224,29 +225,34 @@ const invalidCacheDirRun = spawnSync(
 assert.notEqual(invalidCacheDirRun.status, 0);
 assert((invalidCacheDirRun.stderr + invalidCacheDirRun.stdout).includes("WORKER_LITE_CACHE_DIR must be inside SANDBOX_ROOT"));
 
-const revisePrompt = reasoning.buildRevisePrompt(
-  "Fix it",
-  {
-    enabled: true,
-    decision: "revise",
-    ready: false,
-    belief: 0.1,
-    difficulty: 0.5,
-    halted_reason: "stalled",
-    blockers: ["1 failing check"],
-    risks: [{ kind: "failing_check", detail: "check unit failed", severity: "high" }],
-    unknowns: [],
-    evidence: [],
-    calibration: { stated_success: 0.1, evidence_confidence: 0.1, calibration_gap: 0, overconfident: false },
-    required_changes: ["Make unit pass."],
-    recommended_checks: [],
-    should_revise: true,
-    depth_trace: []
-  },
-  1,
-  "unit failed with stack trace"
-);
+const reviseReport: ReasoningReport = {
+  enabled: true,
+  decision: "revise" as const,
+  ready: false,
+  belief: 0.1,
+  difficulty: 0.5,
+  halted_reason: "stalled",
+  blockers: ["1 failing check"],
+  risks: [{ kind: "failing_check" as const, detail: "check unit failed", severity: "high" as const }],
+  unknowns: [],
+  evidence: [],
+  calibration: { stated_success: 0.1, evidence_confidence: 0.1, calibration_gap: 0, overconfident: false },
+  required_changes: ["Make unit pass."],
+  recommended_checks: [],
+  should_revise: true,
+  depth_trace: []
+};
+const revisePrompt = reasoning.buildRevisePrompt("Fix it", reviseReport, 1, "unit failed with stack trace");
 assert(revisePrompt.includes("Evidence from the failing run"));
+
+const largeFailureEvidence = `unit failed\n${"raw check output ".repeat(1000)}`;
+const digestEvidence = "root cause: import mismatch\nkey evidence: tsc failure\nnext action: fix import";
+const noRiskReport: ReasoningReport = { ...reviseReport, risks: [] };
+const largeRevisePrompt = reasoning.buildRevisePrompt("Fix it", noRiskReport, 1, largeFailureEvidence);
+const digestRevisePrompt = reasoning.buildRevisePrompt("Fix it", noRiskReport, 1, digestEvidence);
+assert(digestRevisePrompt.includes(digestEvidence));
+assert(!digestRevisePrompt.includes("raw check output raw check output"));
+assert(Buffer.byteLength(digestRevisePrompt, "utf8") < Buffer.byteLength(largeRevisePrompt, "utf8") / 4);
 
 const plan = claude.buildClaudeLaunchPlan(
   {
