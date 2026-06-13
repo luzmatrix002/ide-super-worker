@@ -214,7 +214,15 @@ For best results:
 | `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
 | `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |
 | `WORKER_METRICS_FILE` | Optional JSONL path for token usage metrics. |
+| `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`. |
+| `WORKER_PRICE_TABLE` | Optional JSON model price overrides for `npm run stats`. |
 | `WORKER_FAILURE_DIGEST` | Set `1` to generate a cheap-gateway diagnosis on failed jobs. |
+| `WORKER_DIGEST_BEFORE_REVISE` | Set `0` to avoid generating a failure digest before auto-revise. |
+| `WORKER_LITE_MODEL` | Optional cheaper model for `analyze`, `review`, and `failure_digest`. |
+| `WORKER_LITE_CACHE_DIR` | Optional disk cache directory for lite read-only tools; must be inside `SANDBOX_ROOT`. |
+| `WORKER_LITE_CACHE_TTL_MS` | TTL for lite disk cache entries, default `3600000`; `0` bypasses cache. |
+| `ADAPTER_PREFIX_CACHE` | Set `1` to use prefix-cache-friendly `analyze` messages. |
+| `WORKER_FALLBACK_WARN_EVERY` | Warn every N fallback calls; default `5`, `0` disables. |
 | `WORKER_ESCALATE_MODEL` | Optional stronger model for hard revise passes. |
 | `WORKER_ISOLATION` | Set to `worktree` for per-job git worktree isolation. |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` | Optional fallback gateway. |
