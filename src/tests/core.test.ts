@@ -97,6 +97,27 @@ assert.equal(verboseDiffJob.checks[0], diffJob.result.checks[0]);
 assert.equal(metrics.pickCacheTokens({ prompt_tokens_details: { cached_tokens: 12 } }), 12);
 assert.equal(metrics.pickCacheTokens({ cache_read_input_tokens: 7 }), 7);
 
+const originalConsoleError = console.error;
+const fallbackWarnings: string[] = [];
+process.env.WORKER_FALLBACK_WARN_EVERY = "2";
+console.error = (...args: unknown[]) => {
+  fallbackWarnings.push(args.join(" "));
+};
+try {
+  metrics.recordFallbackCall();
+  assert.equal(fallbackWarnings.length, 0);
+  metrics.recordFallbackCall();
+  assert.equal(fallbackWarnings.length, 1);
+  assert(fallbackWarnings[0].includes("[warn][fallback] 2 fallback calls so far this session"));
+  process.env.WORKER_FALLBACK_WARN_EVERY = "0";
+  metrics.recordFallbackCall();
+  metrics.recordFallbackCall();
+  assert.equal(fallbackWarnings.length, 1);
+} finally {
+  console.error = originalConsoleError;
+  delete process.env.WORKER_FALLBACK_WARN_EVERY;
+}
+
 const statsFile = path.join(root, "metrics.jsonl");
 fs.writeFileSync(
   statsFile,

@@ -1,5 +1,25 @@
 import * as fs from "node:fs";
 
+let fallbackCallCount = 0;
+
+function fallbackWarnEvery(): number {
+  const raw = process.env.WORKER_FALLBACK_WARN_EVERY;
+  if (raw === "0") return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+}
+
+export function recordFallbackCall(): void {
+  fallbackCallCount += 1;
+  const warnEvery = fallbackWarnEvery();
+  if (warnEvery > 0 && fallbackCallCount % warnEvery === 0) {
+    console.error(
+      `[warn][fallback] ${fallbackCallCount} fallback calls so far this session. ` +
+        "Primary gateway may be degraded. Check ONEAPI_BASE_URL."
+    );
+  }
+}
+
 // Lightweight usage/cost observability (optimization O7).
 //
 // IMPORTANT: Claude Code's own `total_cost_usd` is computed from Anthropic's

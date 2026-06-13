@@ -9,7 +9,7 @@ import {
   getGatewayBaseUrl,
   getModelName
 } from "./config.js";
-import { appendMetrics, pickCacheTokens } from "./metrics.js";
+import { appendMetrics, pickCacheTokens, recordFallbackCall } from "./metrics.js";
 import { redactSecrets } from "./redact.js";
 
 interface AdapterHandle {
@@ -537,6 +537,7 @@ async function callChatCompletions(
     externalSignal,
     target
   );
+  recordFallbackCall();
   return { response, target };
 }
 
