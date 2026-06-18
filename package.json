@@ -14,7 +14,7 @@
     "doctor:network": "tsx src/doctor.ts --network",
     "stats": "node scripts/stats.mjs",
     "smoke": "npm run build && node dist/smoke_test.js",
-    "test": "npm run build && node dist/tests/core.test.js"
+    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

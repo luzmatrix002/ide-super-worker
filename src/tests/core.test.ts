@@ -29,6 +29,30 @@ const search = await import("../search.js");
 const metrics = await import("../metrics.js");
 const originalFetch = globalThis.fetch;
 
+function readSourceFiles(dir: string): Array<{ file: string; text: string }> {
+  const entries: Array<{ file: string; text: string }> = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "tests") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      entries.push(...readSourceFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+      entries.push({ file: full, text: fs.readFileSync(full, "utf8") });
+    }
+  }
+  return entries;
+}
+
+function gitPorcelain(cwd: string): string {
+  const result = spawnSync("git", ["status", "--porcelain"], {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
 function expectRejectsPath(input: string): void {
   assert.throws(() => security.validatePath(input), /Security/);
 }
@@ -174,6 +198,12 @@ assert(searchResult.results.some((line) => line.includes("needle.txt")));
 const dashSearchResult = search.searchWorkspace({ pattern: "-needle", dirs: [project], glob: "*.txt" });
 assert.equal(dashSearchResult.mode, "lines");
 
+const sourceFiles = readSourceFiles(path.join(process.cwd(), "src"));
+for (const { file, text } of sourceFiles) {
+  assert(!/classif(?:y|ier|ication)[\s\S]{0,160}route/i.test(text), `I3 classify-then-route pattern found in ${file}`);
+  assert(!/route[\s\S]{0,160}classif(?:y|ier|ication)/i.test(text), `I3 route classifier pattern found in ${file}`);
+}
+
 let capturedAnalyzeBody = "";
 let analyzeFetchCount = 0;
 const liteMetricsFile = path.join(root, "lite-metrics.jsonl");
@@ -206,6 +236,43 @@ try {
   assert(liteMetricRows.some((row) => row.route === "cache" && row.tool === "analyze" && row.model === "(cached)"));
 } finally {
   globalThis.fetch = originalFetch;
+  delete process.env.WORKER_METRICS_FILE;
+}
+
+let fallbackAttemptCount = 0;
+const fallbackMetricsFile = path.join(root, "lite-fallback-metrics.jsonl");
+process.env.FALLBACK_BASE_URL = "https://fallback.example.test/v1";
+process.env.FALLBACK_API_KEY = "fallback-unit-test-api-key";
+process.env.FALLBACK_MODEL = "fallback-lite-model";
+process.env.WORKER_METRICS_FILE = fallbackMetricsFile;
+globalThis.fetch = (async (url: any) => {
+  fallbackAttemptCount += 1;
+  if (String(url).startsWith("https://gateway.example.test")) {
+    return new Response("primary failed", { status: 500 });
+  }
+  return new Response(
+    JSON.stringify({
+      model: "fallback-lite-model",
+      usage: { prompt_tokens: 11, completion_tokens: 3 },
+      choices: [{ message: { content: "fallback analysis ok" } }]
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}) as typeof fetch;
+try {
+  const answer = await lite.analyzeDirect("I5 fallback success count", [path.join(project, "src", "needle.txt")], 64);
+  assert.equal(answer, "fallback analysis ok");
+  assert.equal(fallbackAttemptCount, 2);
+  const rows = fs.readFileSync(fallbackMetricsFile, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  const successfulUpstreamRows = rows.filter((row) => row.route !== "cache");
+  assert.equal(successfulUpstreamRows.length, 1);
+  assert.equal(successfulUpstreamRows[0].route, "fallback");
+  assert.equal(successfulUpstreamRows[0].tool, "analyze");
+} finally {
+  globalThis.fetch = originalFetch;
+  delete process.env.FALLBACK_BASE_URL;
+  delete process.env.FALLBACK_API_KEY;
+  delete process.env.FALLBACK_MODEL;
   delete process.env.WORKER_METRICS_FILE;
 }
 
@@ -342,6 +409,40 @@ assert(summary.changed_files.includes("src/a.txt"));
 assert(summary.changed_files.includes("src/b.txt"));
 assert(summary.diff.includes("new"));
 assert(summary.diff.includes("created"));
+
+const readonlyProject = path.join(root, "readonly-project");
+fs.mkdirSync(path.join(readonlyProject, "src"), { recursive: true });
+spawnSync("git", ["init"], { cwd: readonlyProject, stdio: "ignore" });
+spawnSync("git", ["config", "user.email", "test@example.invalid"], { cwd: readonlyProject, stdio: "ignore" });
+spawnSync("git", ["config", "user.name", "Test"], { cwd: readonlyProject, stdio: "ignore" });
+const readonlyFile = path.join(readonlyProject, "src", "readme.txt");
+fs.writeFileSync(readonlyFile, "stable read-only content\n", "utf8");
+spawnSync("git", ["add", "."], { cwd: readonlyProject, stdio: "ignore" });
+spawnSync("git", ["commit", "-m", "init"], { cwd: readonlyProject, stdio: "ignore" });
+assert.equal(gitPorcelain(readonlyProject), "");
+
+globalThis.fetch = (async (_url: any, init: any) => {
+  const request = JSON.parse(String(init.body));
+  const content = JSON.stringify(request.messages ?? []);
+  const answer = content.includes("Return ONLY JSON")
+    ? '{"verdict":"approve","issues":[],"summary":"clean"}'
+    : "readonly analysis ok";
+  return new Response(JSON.stringify({ model: "lite-test", usage: {}, choices: [{ message: { content: answer } }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" }
+  });
+}) as typeof fetch;
+try {
+  assert.equal(await lite.analyzeDirect("Summarize without editing.", [readonlyFile], 64), "readonly analysis ok");
+  assert.equal(gitPorcelain(readonlyProject), "");
+  assert.equal(
+    await lite.reviewDirect({ files: [readonlyFile], focus: "Check without editing.", maxTokens: 64 }),
+    '{"verdict":"approve","issues":[],"summary":"clean"}'
+  );
+  assert.equal(gitPorcelain(readonlyProject), "");
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 let attempts = 0;
 globalThis.fetch = (async () => {

@@ -4,6 +4,21 @@ Stop spending premium Codex context on bulk code reading, patch loops, and giant
 
 `mcp-codex-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
 
+![MCP Codex Worker efficiency lane](docs/efficiency-lane.svg)
+
+## Efficiency First
+
+Most AI coding tools optimize the model call. This project optimizes the route.
+
+The fast path is deliberately split:
+
+- `search` handles repo discovery with zero LLM calls.
+- `analyze` and `review` use one cheap gateway call for read-only work.
+- `start` moves implementation loops into an async worker so Codex is not blocked by every file read, failed attempt, or test log.
+- `get` and `wait` return compact evidence instead of dumping the whole transcript back into the premium thread.
+
+That routing discipline is the efficiency edge: Codex stays focused on planning and review while the worker absorbs the bulky middle.
+
 ## The Simple Picture
 
 Without this worker, Codex often pays to ingest everything:
@@ -62,10 +77,21 @@ This project gives you the missing plumbing:
 - Compact result payloads, so Codex does not swallow unnecessary tokens.
 - Metrics, fallback, retries, and optional worktree isolation for real operations.
 
+## Efficiency Comparison
+
+| Workflow | What usually happens | Efficiency gap | MCP Codex Worker path |
+| --- | --- | --- | --- |
+| Direct premium-agent coding | The main agent reads files, retries fixes, sees every test log, and ingests large diffs. | Premium context becomes the workspace transcript. | Codex sends one small task; worker returns changed files, checks, logs, and optional diff. |
+| Generic cheaper-model wrapper | A cheaper model runs, but the main agent still needs bulky context and manual verification. | Lower model price, same noisy workflow. | Cheap gateway handles bulk tokens; scoped checks and compact results decide whether work is trustworthy. |
+| Full agent loop for read-only questions | Starting an edit-capable loop for summaries and discovery. | Slow startup and unnecessary write surface. | `search` is zero-LLM; `analyze`/`review` are read-only cheap calls. |
+| Parallel implementation in one repo | Dirty worktrees collide and review payloads grow. | Coordination overhead eats the gain. | Optional worktree isolation plus scoped patch checks keep jobs separable. |
+
 ## Highlights
 
 - Async MCP tools: `start`, `get`, `tail`, `wait`, `cancel`.
 - Read-only lite tool: `analyze` answers file-summary questions without launching Claude Code.
+- Code review lite tool: `review` checks diffs/files through the cheap gateway.
+- Zero-LLM repo discovery: `search` uses bounded local search instead of spending model tokens.
 - Anthropic-to-OpenAI adapter: lets Claude Code talk to OpenAI-compatible gateways.
 - 429 and 5xx retry handling with `Retry-After` support.
 - Optional `include_diff:false` to return only `changed_files` and `checks`.
@@ -247,6 +273,14 @@ npm run doctor:network
 ```
 
 `doctor:network` depends on your real gateway credentials. Build, test, and smoke should pass offline.
+
+The routing contract tests lock the core money/safety invariants:
+
+- I3: no predictive classifier call before routing.
+- I5: identical read-only requests hit cache; primary failure plus fallback records one successful upstream.
+- I6: read-only tools do not write to the workspace.
+
+The smoke test also verifies the current tool surface: `analyze`, `cancel`, `get`, `review`, `search`, `start`, `tail`, and `wait`.
 
 ## When To Use It
 

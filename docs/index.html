@@ -125,6 +125,14 @@
         background: #fff7ed;
         color: #4a3420;
       }
+      .promo-image {
+        width: 100%;
+        max-width: 980px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.1);
+      }
       footer {
         padding: 30px 0;
         color: var(--muted);
@@ -205,6 +213,7 @@
       <section>
         <div class="wrap">
           <h2>The Plain Flow</h2>
+          <img class="promo-image" src="efficiency-lane.svg" alt="MCP Codex Worker efficiency lane" />
           <div class="diagram" aria-label="Codex delegates to worker, worker calls cheap gateway, worker returns compact checks">
             <div class="node">
               <strong>Codex</strong>
@@ -289,6 +298,10 @@ npm run smoke</code></pre>
             <article class="card">
               <h3>Read-Only Summaries</h3>
               <p>Use the lite <code>analyze</code> tool when a full Claude Code loop would be overkill.</p>
+            </article>
+            <article class="card">
+              <h3>Zero-LLM Search</h3>
+              <p>Use <code>search</code> for bounded repo discovery before spending any model tokens.</p>
             </article>
           </div>
         </div>

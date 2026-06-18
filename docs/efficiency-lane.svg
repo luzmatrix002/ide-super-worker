@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">MCP Codex Worker efficiency lane</title>
+  <desc id="desc">A before and after diagram showing direct AI coding workflows burning premium context while MCP Codex Worker routes search, read-only analysis, implementation loops, checks, and compact evidence through a faster cheaper lane.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef8f6"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#17202a" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#b42318"/>
+    </marker>
+    <style>
+      text { font-family: Inter, Segoe UI, Arial, sans-serif; fill: #16202a; }
+      .muted { fill: #5c6b7a; font-size: 22px; }
+      .small { fill: #5c6b7a; font-size: 18px; }
+      .label { fill: #ffffff; font-weight: 800; font-size: 17px; letter-spacing: 0.5px; }
+      .h1 { font-size: 48px; font-weight: 850; }
+      .h2 { font-size: 28px; font-weight: 800; }
+      .boxTitle { font-size: 24px; font-weight: 800; }
+      .boxText { font-size: 18px; fill: #4b5b68; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="675" fill="url(#bg)"/>
+
+  <text x="72" y="82" class="h1">Give Codex an efficiency lane</text>
+  <text x="74" y="122" class="muted">Less premium context. Fewer loops in the main thread. More verified work per minute.</text>
+
+  <g transform="translate(72 170)">
+    <rect x="0" y="0" width="500" height="390" rx="14" fill="#fff" stroke="#e2e8f0" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="500" height="56" rx="14" fill="#b42318"/>
+    <text x="24" y="36" class="label">Generic direct-agent flow</text>
+
+    <rect x="38" y="92" width="170" height="70" rx="10" fill="#fff5f5" stroke="#f3b6b2"/>
+    <text x="60" y="122" class="boxTitle">Codex</text>
+    <text x="60" y="148" class="boxText">main thread</text>
+
+    <rect x="292" y="92" width="170" height="70" rx="10" fill="#fff5f5" stroke="#f3b6b2"/>
+    <text x="315" y="122" class="boxTitle">Repo</text>
+    <text x="315" y="148" class="boxText">large files</text>
+
+    <path d="M210 127 C245 104, 257 104, 290 127" stroke="#b42318" stroke-width="4" fill="none" marker-end="url(#arrowRed)"/>
+    <path d="M292 142 C252 175, 247 175, 208 142" stroke="#b42318" stroke-width="4" fill="none" marker-end="url(#arrowRed)"/>
+
+    <rect x="38" y="212" width="424" height="96" rx="10" fill="#fff8f7" stroke="#f3b6b2"/>
+    <text x="62" y="246" class="boxTitle">Cost leaks into the wrong place</text>
+    <text x="62" y="276" class="boxText">file reads, repair attempts, test noise, full diffs</text>
+
+    <text x="38" y="352" class="small">Result: the premium planner becomes the transcript sink.</text>
+  </g>
+
+  <g transform="translate(628 170)">
+    <rect x="0" y="0" width="500" height="390" rx="14" fill="#fff" stroke="#d7eee8" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="500" height="56" rx="14" fill="#0f766e"/>
+    <text x="24" y="36" class="label">MCP Codex Worker flow</text>
+
+    <rect x="34" y="92" width="134" height="70" rx="10" fill="#eefaf7" stroke="#9ed9cc"/>
+    <text x="58" y="122" class="boxTitle">Codex</text>
+    <text x="58" y="148" class="boxText">decides</text>
+
+    <rect x="192" y="92" width="134" height="70" rx="10" fill="#eefaf7" stroke="#9ed9cc"/>
+    <text x="215" y="122" class="boxTitle">Worker</text>
+    <text x="215" y="148" class="boxText">executes</text>
+
+    <rect x="350" y="92" width="118" height="70" rx="10" fill="#eefaf7" stroke="#9ed9cc"/>
+    <text x="370" y="122" class="boxTitle">Cheap</text>
+    <text x="370" y="148" class="boxText">gateway</text>
+
+    <path d="M170 127 L190 127" stroke="#0f766e" stroke-width="4" marker-end="url(#arrowGreen)"/>
+    <path d="M328 127 L348 127" stroke="#0f766e" stroke-width="4" marker-end="url(#arrowGreen)"/>
+
+    <rect x="34" y="202" width="130" height="82" rx="10" fill="#f7fbff" stroke="#d6e4f0"/>
+    <text x="56" y="235" class="boxTitle">search</text>
+    <text x="56" y="263" class="boxText">0 LLM calls</text>
+
+    <rect x="184" y="202" width="130" height="82" rx="10" fill="#f7fbff" stroke="#d6e4f0"/>
+    <text x="206" y="235" class="boxTitle">analyze</text>
+    <text x="206" y="263" class="boxText">one cheap call</text>
+
+    <rect x="334" y="202" width="134" height="82" rx="10" fill="#f7fbff" stroke="#d6e4f0"/>
+    <text x="356" y="235" class="boxTitle">start</text>
+    <text x="356" y="263" class="boxText">async checks</text>
+
+    <rect x="34" y="318" width="434" height="42" rx="10" fill="#0f766e"/>
+    <text x="58" y="345" class="label">Back to Codex: changed files + checks + optional diff</text>
+  </g>
+
+  <text x="72" y="622" class="h2">Efficiency advantage: route each subtask to the cheapest safe lane, then return compact proof.</text>
+</svg>
