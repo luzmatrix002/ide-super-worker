@@ -9,6 +9,7 @@ import {
   getFallbackApiKey,
   getFallbackBaseUrl,
   getFallbackModel,
+  getFallbackModels,
   getGatewayApiKey,
   getGatewayBaseUrl,
   getModelName,
@@ -118,6 +119,7 @@ async function main(): Promise<void> {
   const fbKey = getFallbackApiKey();
   console.log(`  fallback gateway: ${getFallbackBaseUrl() || "(not set)"}`);
   console.log(`  fallback model: ${getFallbackModel() || "(not set)"}`);
+  console.log(`  fallback model pool: ${getFallbackModels().join(", ") || "(not set)"}`);
   console.log(`  fallback api key: ${fbKey ? `set, length=${fbKey.length}` : "(not set)"}`);
   console.log(`  fallback active: ${fallbackConfigured() ? "yes (auto on primary failure)" : "no"}`);
   console.log(`  claude cli model: ${getClaudeCliModel()}`);

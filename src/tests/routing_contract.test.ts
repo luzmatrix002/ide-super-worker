@@ -27,6 +27,7 @@ process.env.WORKER_LITE_CACHE_DIR = cacheDir;
 process.env.WORKER_LITE_CACHE_TTL_MS = "3600000";
 process.env.WORKER_METRICS_FILE = metricsFile;
 process.env.CLAUDE_CODE_MODEL = "sonnet";
+delete process.env.ADAPTER_PREFIX_CACHE;
 
 const lite = await import("../lite.js");
 

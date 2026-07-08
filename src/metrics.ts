@@ -2,6 +2,20 @@ import * as fs from "node:fs";
 
 let fallbackCallCount = 0;
 
+export type WorkerCategory =
+  | "artifact"
+  | "implementation"
+  | "context_pack"
+  | "diff_digest"
+  | "command_digest"
+  | "mechanical_edit"
+  | "history"
+  | "draft"
+  | "search"
+  | "review"
+  | "analysis"
+  | "job_control";
+
 function fallbackWarnEvery(): number {
   const raw = process.env.WORKER_FALLBACK_WARN_EVERY;
   if (raw === "0") return 0;
@@ -41,6 +55,23 @@ export function appendMetrics(row: Record<string, unknown>): void {
   }
 }
 
+export function appendToolMetric(
+  tool: string,
+  category: WorkerCategory,
+  status: "ok" | "error" | "rejected" = "ok",
+  extra: Record<string, unknown> = {}
+): void {
+  appendMetrics({
+    event: "tool_call",
+    route: "worker",
+    tool,
+    category,
+    status,
+    ...extra,
+    prompt_tokens: 0,
+    completion_tokens: 0
+  });
+}
 
 /** Different gateways expose prompt-cache hits under different usage keys. */
 export function pickCacheTokens(usage: any): number | null {

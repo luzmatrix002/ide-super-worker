@@ -4,7 +4,7 @@ import {
   getClaudeCliModel,
   getFallbackApiKey,
   getFallbackBaseUrl,
-  getFallbackModel,
+  getFallbackModels,
   getGatewayApiKey,
   getGatewayBaseUrl,
   getModelName
@@ -160,14 +160,15 @@ export function fallbackTarget(): UpstreamTarget | undefined {
   return { baseUrl: getFallbackBaseUrl()!.replace(/\/+$/, ""), apiKey: getFallbackApiKey(), label: "fallback" };
 }
 
-// Choose the model name for a fallback request. A model that already looks like
-// a fallback-provider model (e.g. an escalated "deepseek-v4-pro") is preserved;
-// otherwise we use FALLBACK_MODEL so a Qwen/primary-only name never leaks to the
-// fallback provider.
-function pickFallbackModel(requested: unknown): string {
+// Choose fallback model candidates. A request that already looks fallback-native
+// is tried first, then the configured FALLBACK_MODELS pool fills the remaining
+// slots. The pool is capped in config.ts.
+function pickFallbackModels(requested: unknown): string[] {
   const name = typeof requested === "string" ? requested.trim() : "";
-  if (name.toLowerCase().startsWith("deepseek")) return name;
-  return getFallbackModel() || name || "deepseek-v4-flash";
+  const configured = getFallbackModels();
+  const candidates = name.toLowerCase().startsWith("deepseek") ? [name, ...configured] : configured;
+  const unique = Array.from(new Set(candidates.map((item) => item.trim()).filter(Boolean)));
+  return unique.length > 0 ? unique.slice(0, 3) : [name || "deepseek-v4-flash"];
 }
 
 function textFromAnthropicContent(content: unknown): string {
@@ -528,17 +529,31 @@ async function callChatCompletions(
   }
 
   // Reaching here means the primary failed and a fallback exists (otherwise the
-  // try block returned or rethrew). Assert non-null for the type checker.
+  // try block returned or rethrew). Try the configured fallback model pool in
+  // order and return the first healthy response.
   const target = fallback as UpstreamTarget;
-  const fallbackRequest = { ...openAIRequest, model: pickFallbackModel(openAIRequest.model) };
-  const response = await callOpenAIWithRetry(
-    "/chat/completions",
-    { method: "POST", body: JSON.stringify(fallbackRequest) },
-    externalSignal,
-    target
-  );
-  recordFallbackCall();
-  return { response, target };
+  const fallbackModels = pickFallbackModels(openAIRequest.model);
+  let lastError: unknown;
+
+  for (let index = 0; index < fallbackModels.length; index += 1) {
+    const fallbackRequest = { ...openAIRequest, model: fallbackModels[index] };
+    try {
+      const response = await callOpenAIWithRetry(
+        "/chat/completions",
+        { method: "POST", body: JSON.stringify(fallbackRequest) },
+        externalSignal,
+        target
+      );
+      recordFallbackCall();
+      if (response.ok || index === fallbackModels.length - 1) return { response, target };
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      lastError = error;
+      if (externalSignal?.aborted || index === fallbackModels.length - 1) throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("fallback upstream request failed");
 }
 
 function modelObject(id: string): Record<string, unknown> {

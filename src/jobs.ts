@@ -1,7 +1,7 @@
 import { JOB_TTL_MS, LOG_BUFFER_MAX, LOG_LINE_MAX, MAX_STORED_JOBS, RAW_STREAM_MAX, SERVER_VERSION } from "./config.js";
 import { redactSecrets } from "./redact.js";
 import { removeWorktree } from "./workspace.js";
-import type { CheckCommand, JobState, JobStatus, ResolvedScopedPatch, StartJobInput } from "./types.js";
+import type { CheckCommand, JobState, JobStatus, ReliabilityProfile, ResolvedScopedPatch, StartJobInput } from "./types.js";
 
 export const jobs = new Map<string, JobState>();
 
@@ -13,6 +13,7 @@ export interface JobReasoningConfig {
   autoReviseEnabled: boolean;
   maxRevisePasses: number;
   stages?: StartJobInput["stages"];
+  reliabilityProfile?: ReliabilityProfile;
 }
 
 export function createJobState(
@@ -51,6 +52,7 @@ export function createJobState(
     maxRevisePasses: reasoning?.maxRevisePasses ?? 0,
     revisePass: 0,
     seenBlockerSigs: new Set<string>(),
+    reliabilityProfile: reasoning?.reliabilityProfile,
     stages: reasoning?.stages,
     stageIndex: 0,
     stageResults: [],

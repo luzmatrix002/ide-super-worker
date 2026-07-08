@@ -1,6 +1,6 @@
 {
   "name": "mcp-codex-worker",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +12,11 @@
     "setup": "tsx src/setup.ts",
     "doctor": "tsx src/doctor.ts",
     "doctor:network": "tsx src/doctor.ts --network",
+    "codex:audit": "node scripts/codex_audit.mjs",
+    "codex:guard": "npm run codex:audit -- --since-minutes=60 && npm run stats:gate",
+    "skills:validate": "node scripts/validate_skills.mjs",
     "stats": "node scripts/stats.mjs",
+    "stats:gate": "node scripts/stats.mjs --gate --since-minutes=60",
     "smoke": "npm run build && node dist/smoke_test.js",
     "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js"
   },

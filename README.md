@@ -89,14 +89,18 @@ This project gives you the missing plumbing:
 ## Highlights
 
 - Async MCP tools: `start`, `get`, `tail`, `wait`, `cancel`.
-- Read-only lite tool: `analyze` answers file-summary questions without launching Claude Code.
+- Read-only lite tools: `read_pack`, `analyze`, `diff_digest`, `history`, and `draft` keep bulky reading/review/drafting out of the premium thread.
 - Code review lite tool: `review` checks diffs/files through the cheap gateway.
-- Zero-LLM repo discovery: `search` uses bounded local search instead of spending model tokens.
+- Zero-LLM repo discovery and mechanical work: `search` uses bounded local search, and `apply_edits` handles deterministic replacements without a model call.
+- Worker-side command digesting: `shell` can run tests/builds/lint and return a compact failure digest. Non-zero command exits return `status:"failed"` or `status:"timeout"` with `failure_kind` and `required_action`; they are command outcomes, not tool transport errors.
+- Receipt abnormal-output assessment: every receipt carries a deterministic accept/repair verdict and bounded repair guidance without default multi-model voting.
+- Runtime tool containment: the worker classifies tool errors, opens per-tool/per-error-class circuits, intercepts unhealthy routes, and uses deterministic fallbacks for `review`/`analyze` when the LLM route is unhealthy.
+- Reliability tiers and episode summaries: `start` can record `lite`, `standard`, `strict`, or `critical` expectations without blocking old callers; hard rejection happens only with `blocking_policy:"enforce"`.
 - Anthropic-to-OpenAI adapter: lets Claude Code talk to OpenAI-compatible gateways.
 - 429 and 5xx retry handling with `Retry-After` support.
 - Optional `include_diff:false` to return only `changed_files` and `checks`.
 - Deterministic verification layer: scope checks, command checks, result signals, and bounded auto-revise.
-- Cost telemetry: writes gateway token usage to JSONL when `WORKER_METRICS_FILE` is set.
+- Cost telemetry: writes gateway token usage and worker tool-call categories to JSONL when `WORKER_METRICS_FILE` is set.
 - Optional fallback gateway when the primary provider fails.
 - Optional worktree isolation for parallel jobs inside one repository.
 - Secret redaction in logs and tool responses.
@@ -119,12 +123,19 @@ Use it when you want Codex to stay sharp instead of stuffed:
 | --- | --- |
 | `start` | Start an async Claude Code job in an allowed directory. Supports optional sequential `stages`. |
 | `get` | Read current job status and compact structured result; pass `verbose:true` for the full legacy payload. |
+| `get_artifact_slice` | Read a bounded redacted slice from an artifact referenced by a worker receipt. |
 | `tail` | Read recent worker logs. |
 | `wait` | Wait for completion without killing the job on timeout; pass `verbose:true` for the full legacy payload. |
 | `cancel` | Kill a running job process tree. |
 | `analyze` | Read-only cheap-model analysis for selected files or bounded globs. |
 | `review` | Cheap-model review of a job diff/checks or selected files, returning a structured verdict. |
 | `search` | Zero-LLM bounded repository search using `rg` when available. |
+| `read_pack` | Zero-LLM context packer for selected paths; returns bounded symbol/keyword slices instead of whole files. |
+| `diff_digest` | Summarize current git diff by file, hunk headers, and risk; optionally run cheap red-team review. |
+| `shell` | Run bounded worker-side commands with optional `digest:true` for test/build/lint output. |
+| `apply_edits` | Zero-LLM literal or regex replacements with replacement-count checks. |
+| `history` | Bounded git log/blame timeline for file or line archaeology. |
+| `draft` | Draft commit messages, PR descriptions, changelog notes, or release notes from the current diff. |
 
 ## Quick Start
 
@@ -201,6 +212,8 @@ Use `include_diff:false` by default when Codex only needs to decide whether the 
 
 This project stacks several cost controls:
 
+These controls reduce main-thread context, payload size, and accounting noise; they do not impose a spend ceiling on the worker LLM. Primary, fallback, and escalation models are chosen by capability and reliability configuration, not by price gates. `WORKER_PRICE_*` values are for reporting only and must not downgrade, block, or skip fallback/escalation usage.
+
 - `include_diff:false` reduces high-cost Codex ingestion.
 - `DIFF_MAX_BYTES` caps patch payloads.
 - `INCLUDE_DIFF_DEFAULT=0` makes omitted `include_diff` behave like `false`.
@@ -208,8 +221,10 @@ This project stacks several cost controls:
 - `analyze` skips Claude Code for read-only summaries.
 - `search` handles symbol/file discovery without any LLM call.
 - `review` and `WORKER_FAILURE_DIGEST=1` move diff review and failure diagnosis to the cheaper gateway.
-- `WORKER_METRICS_FILE` records real gateway token usage.
+- `read_pack`, `diff_digest`, `shell digest`, `apply_edits`, `history`, and `draft` move the remaining high-token planning/review chores into worker lanes.
+- `WORKER_METRICS_FILE` records real gateway token usage plus `event=tool_call` rows for zero-LLM worker calls.
 - `WORKER_ESCALATE_MODEL` upgrades only failed, difficult revise passes.
+- `WORKER_RELIABILITY_TIER`, `WORKER_BLOCKING_POLICY`, `WORKER_SEMANTIC_GATE`, and `WORKER_TOOL_BUDGET` record reliability expectations and blocking risk. Defaults are observe-only to avoid surprise stalls.
 - `WORKER_ISOLATION=worktree` allows safe parallel work in one repo.
 - Prompt-cache-friendly usage keeps stable instructions before dynamic task text.
 
@@ -224,9 +239,15 @@ For best results:
 3. Add concrete `checks` so the worker proves completion.
 4. Use `analyze` for read-only questions.
 5. Enable `WORKER_METRICS_FILE` and compare token usage by route/model.
-6. Use a cheap default model and reserve `WORKER_ESCALATE_MODEL` for difficult revise passes.
+6. Use `read_pack` instead of full-file reads and `diff_digest` instead of full diff ingestion.
+7. Use `shell` with `digest:true` for tests/builds/lint so command output is summarized before Codex sees it.
+8. Keep `start` below 30% of worker calls; use finer tools for search, reading, diff digestion, history, drafts, and mechanical edits.
+9. Treat receipt `abnormal.verdict !== "accept"` as a repair signal before considering multi-model parallel review. For `shell`, use `failure_kind` and `required_action` first; do not escalate to the main model just because the command exit code is non-zero.
+10. Use a fit-for-task default model and reserve `WORKER_ESCALATE_MODEL` for difficult revise passes; do not downgrade primary, fallback, or escalation models because of cost.
 
 ## Important Environment Variables
+
+For less common stats, cache, reliability, and circuit-breaker settings, see [Advanced Configuration](docs/advanced-config.md).
 
 | Variable | Purpose |
 | --- | --- |
@@ -236,12 +257,13 @@ For best results:
 | `CLAUDE_MODEL` / `ANTHROPIC_MODEL` | Real backend model used by the gateway. |
 | `CLAUDE_CODE_MODEL` | Model name passed to Claude Code for local validation, usually `sonnet`. |
 | `USE_OPENAI_ADAPTER` | `1` to use the local Anthropic-to-OpenAI adapter. |
+| `MAX_RUNNING_JOBS` | Worker concurrency limit, default `4`, clamped to `1-100`. |
 | `DIFF_MAX_BYTES` | Maximum returned diff size. |
 | `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
 | `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |
 | `WORKER_METRICS_FILE` | Optional JSONL path for token usage metrics. |
-| `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`. |
-| `WORKER_PRICE_TABLE` | Optional JSON model price overrides for `npm run stats`. |
+| `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`; accounting only, never a worker LLM cost gate. |
+| `WORKER_PRICE_TABLE` | Optional JSON model price overrides for `npm run stats`; must not affect primary/fallback/escalation selection. |
 | `WORKER_FAILURE_DIGEST` | Set `1` to generate a cheap-gateway diagnosis on failed jobs. |
 | `WORKER_DIGEST_BEFORE_REVISE` | Set `0` to avoid generating a failure digest before auto-revise. |
 | `WORKER_LITE_MODEL` | Optional cheaper model for `analyze`, `review`, and `failure_digest`. |
@@ -249,9 +271,33 @@ For best results:
 | `WORKER_LITE_CACHE_TTL_MS` | TTL for lite disk cache entries, default `3600000`; `0` bypasses cache. |
 | `ADAPTER_PREFIX_CACHE` | Set `1` to use prefix-cache-friendly `analyze` messages. |
 | `WORKER_FALLBACK_WARN_EVERY` | Warn every N fallback calls; default `5`, `0` disables. |
+| `WORKER_OVERALL_TOOL_ERROR_MAX_PCT` | Gate threshold for total worker tool error rate; default `5`, and the rate must stay below this value. |
+| `WORKER_SINGLE_TOOL_ERROR_MAX_PCT` | Gate threshold for each individual tool's error rate; default `3`, and the rate must stay below this value. |
+| `WORKER_CATEGORY_ERROR_MAX_PCT` | Gate threshold for category-level tool error rate; default `5`. `WORKER_TOOL_ERROR_MAX_PCT` remains as a legacy alias. |
+| `WORKER_TOOL_ERROR_MIN_CALLS` | Minimum sample count before category or single-tool error-rate gates apply; default `10`. |
+| `WORKER_TOOL_REVIEW_INTERVAL_MS` | Runtime tool error-rate review interval while the MCP server is running; default `10800000` (3 hours). |
+| `WORKER_TOOL_REVIEW_SINCE_MINUTES` | Review window for runtime tool error-rate control; default `180`. |
+| `WORKER_TOOL_REVIEW_GRACE_MS` | How late a scheduled review can run before it is treated as overdue; default `300000`. |
+| `WORKER_TOOL_REVIEW_DISABLED` | Set `1` to disable the runtime review loop. |
+| `WORKER_TOOL_CIRCUIT_BREAKER` | Active runtime containment switch; default enabled. Set `0` to disable per-tool/per-error-class circuits. |
+| `WORKER_TOOL_CIRCUIT_WINDOW_MS` | Rolling window for immediate circuit decisions; default `900000`. |
+| `WORKER_TOOL_CIRCUIT_OPEN_MS` | How long an opened circuit intercepts the unhealthy route; default `600000`. |
+| `WORKER_TOOL_CIRCUIT_MIN_CALLS` | Minimum calls before generic per-tool error-rate circuits can open; default `3`. |
+| `WORKER_TOOL_CIRCUIT_MIN_ERRORS` | Minimum errors before generic per-tool circuits can open; default `2`. |
+| `WORKER_TOOL_ERROR_CLASS_CIRCUIT_MIN_ERRORS` | Minimum same-class errors before a per-error-class circuit can open; default `1`. |
+| `WORKER_TOOL_CIRCUIT_IMMEDIATE_CLASSES` | Comma-separated classes that open a circuit immediately; default `upstream_404,search_timeout,shell_mismatch`. |
+| `WORKER_TOOL_CIRCUIT_STATE_FILE` | Optional persisted circuit state path. Defaults to `WORKER_METRICS_FILE + ".state.json"` so open circuits and a bounded rolling-event snapshot survive MCP restarts. |
+| `WORKER_TOOL_CIRCUIT_STATE_EVENT_MAX` | Maximum recent tool-control events persisted with circuit state; default `200`, set `0` to persist only open circuits. |
+| `WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS` | Minimum interval for non-error state snapshots; default `30000`. Errors and circuit opens force a save. |
+| `WORKER_TOOL_CIRCUIT_STATE_LOCK_STALE_MS` | Best-effort state lock stale threshold; default `30000`. Lock contention skips the snapshot instead of blocking tool calls. |
 | `WORKER_ESCALATE_MODEL` | Optional stronger model for hard revise passes. |
+| `WORKER_RELIABILITY_TIER` | Default `start` reliability profile: `lite`, `standard`, `strict`, or `critical`; default `standard`. |
+| `WORKER_BLOCKING_POLICY` | How missing reliability gates behave: `observe`, `warn`, or `enforce`; default `observe`. |
+| `WORKER_SEMANTIC_GATE` | Declared semantic-review expectation: `off`, `warn`, or `required`; critical jobs default to `warn`. |
+| `WORKER_TOOL_BUDGET` | Optional advisory max tool-call budget recorded in metrics and reliability profile. |
 | `WORKER_ISOLATION` | Set to `worktree` for per-job git worktree isolation. |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` | Optional fallback gateway. |
+| `FALLBACK_MODELS` | Optional comma-separated fallback model pool, capped at 3 model candidates for bounded routing. Overrides `FALLBACK_MODEL` / `FALLBACK_ESCALATE_MODEL` when set; not a cost cap. |
 
 ## Security Model
 
@@ -270,9 +316,33 @@ npm run build
 npm run test
 npm run smoke
 npm run doctor:network
+npm run skills:validate
+npm run codex:audit -- --since-minutes=60
+npm run codex:guard
 ```
 
 `doctor:network` depends on your real gateway credentials. Build, test, and smoke should pass offline.
+
+`npm run codex:audit -- --since-minutes=60` checks recent worker metrics, receipt artifact coverage, the persisted `AGENTS.md` routing rules, fallback usage, and worker category evidence. It also prints the known blind spot: direct main-thread shell output, full-file reads, chat context, and pasted prompts are outside `WORKER_METRICS_FILE`.
+
+`npm run codex:guard` runs the local Codex audit and then `stats:gate`.
+
+`npm run skills:validate` checks the project-specific `.claude/skills/` library used to preserve project doctrine for cheaper or lower-context worker sessions.
+
+`npm run stats` reports gateway token usage, receipt byte/artifact usage, and a Worker Tool Audit. `npm run stats:gate -- <metrics.jsonl>` turns the same thresholds into hard gates with exit code 2 on failure. Category targets are: search 80%, context_pack 70%, command_digest 70%, diff_digest 60%, review 60%, mechanical_edit 50%, history 60%, draft 80%, analysis 60%, and `start` must stay at or below 30% of worker calls. Gate mode also fails if required categories have no audit evidence, overall tool error rate is 5% or higher, any single tool error rate is 3% or higher after the sample floor, fallback ratio exceeds 10%, large receipt payloads lack artifact refs, or `diff_digest` red-team coverage falls below 30%. Tool error rate is reserved for worker/tool execution failures; shell command failures are recorded as `command_status` with local repair guidance, and stale job ids or invalid caller inputs are recorded as `rejected`.
+
+When the MCP server is running, it also reviews recent tool error rates every 3 hours by default. A threshold breach, or a review that runs later than `WORKER_TOOL_REVIEW_GRACE_MS`, enables escalation self-heal defaults for later `start` calls: `reliability_tier=strict`, `blocking_policy=warn`, `semantic_gate=warn`, `auto_revise=true`, and at least one revise pass. Explicit `start` arguments still win over these defaults.
+
+Runtime containment is more aggressive than the 3-hour review. Every tool result updates an in-memory rolling window. Real tool execution errors are classified (`upstream_404`, `upstream_error`, `shell_mismatch`, `search_timeout`, `timeout`, `missing_command`, `missing_path`, `permission_denied`, `dependency_missing`, or `unknown_failure`). Repeated errors, or any immediate-class error, open a temporary circuit. While open, unhealthy routes are intercepted as `rejected` instead of producing more errors; `review` and `analyze` degrade to deterministic local evidence when possible. Open circuits and a bounded rolling-event snapshot are persisted to a state sidecar file and reloaded on MCP startup or the next tool-control decision, so restarts do not immediately forget an unhealthy route or a tool already close to its circuit threshold. To keep the hot path cheap, OK outcomes are snapshotted only after `WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS`; errors and circuit opens force a save. Shell command business failures still record `command_status` and do not count as tool errors. On Windows, PowerShell-shaped shell commands accidentally sent through `cmd.exe` are retried once through `powershell -NoProfile -ExecutionPolicy Bypass -Command`.
+
+Additional redundancy that is already in place:
+
+- Gate redundancy: `codex:guard` combines recent routing audit evidence with `stats:gate`.
+- Route redundancy: `review`/`analyze` can fall back to local deterministic evidence while LLM review routes are unhealthy.
+- Shell redundancy: shell mismatch is retried once through the matching Windows shell before surfacing failure.
+- State redundancy: circuit state is atomically written with a temp file plus rename, protected by a best-effort lock, guarded by a checksum, and pruned on load. Corrupt, mismatched, or expired state is ignored and rewritten instead of crashing the MCP server.
+- Restart redundancy: a small rolling-event snapshot is restored with open circuits so a restart does not erase tools that are already near a circuit threshold.
+- Efficiency guardrail: state writes are bounded by event count and save interval; lock contention skips a snapshot instead of delaying the worker.
 
 The routing contract tests lock the core money/safety invariants:
 
@@ -280,7 +350,7 @@ The routing contract tests lock the core money/safety invariants:
 - I5: identical read-only requests hit cache; primary failure plus fallback records one successful upstream.
 - I6: read-only tools do not write to the workspace.
 
-The smoke test also verifies the current tool surface: `analyze`, `cancel`, `get`, `review`, `search`, `start`, `tail`, and `wait`.
+The smoke test also verifies the current tool surface: `analyze`, `apply_edits`, `cancel`, `diff_digest`, `draft`, `get`, `get_artifact_slice`, `history`, `read_pack`, `review`, `search`, `shell`, `start`, `tail`, and `wait`.
 
 ## When To Use It
 

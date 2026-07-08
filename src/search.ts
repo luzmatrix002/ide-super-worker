@@ -22,6 +22,11 @@ export interface SearchResult {
 const SEARCH_TIMEOUT_MS = 5_000;
 const LINE_MAX = 200;
 
+function rgMaxBuffer(): number {
+  const parsed = Number(process.env.WORKER_SEARCH_RG_MAX_BUFFER);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 8 * 1024 * 1024;
+}
+
 function maxResults(value: unknown): number {
   const parsed = Number(value ?? 50);
   if (!Number.isFinite(parsed)) return 50;
@@ -48,10 +53,11 @@ function runRg(input: SearchInput, limit: number, mode: "lines" | "files" | "cou
     encoding: "utf8",
     timeout: SEARCH_TIMEOUT_MS,
     windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024
+    maxBuffer: rgMaxBuffer()
   });
 
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOBUFS") return undefined;
   if (result.error) throw new Error(`search failed: ${result.error.message}`);
   if (result.status !== 0 && result.status !== 1) {
     throw new Error(`search failed: ${(result.stderr || result.stdout || `rg exited ${result.status}`).slice(0, 500)}`);
@@ -102,19 +108,40 @@ function matchesGlob(file: string, glob?: string): boolean {
   return new RegExp(`(^|/)${source}$`, "i").test(normalized);
 }
 
-function walk(dir: string, out: string[]): void {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+function collectFiles(root: string, out: string[]): void {
+  const stat = fs.statSync(root);
+  if (stat.isFile()) {
+    out.push(root);
+    return;
+  }
+  if (!stat.isDirectory()) return;
+
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "dist") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, out);
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) collectFiles(full, out);
     else if (entry.isFile()) out.push(full);
   }
+}
+
+function relativeDisplay(file: string, roots: string[]): string {
+  const directoryRoot = roots.find((root) => {
+    try {
+      return fs.statSync(root).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  const base = directoryRoot || path.dirname(roots[0] || file);
+  const relative = path.relative(base, file).replace(/\\/g, "/");
+  return relative && !relative.startsWith("..") ? relative : file.replace(/\\/g, "/");
 }
 
 function runNodeSearch(input: SearchInput, limit: number, mode: "lines" | "files" | "count"): SearchResult {
   const re = new RegExp(input.pattern, "u");
   const files: string[] = [];
-  for (const dir of input.dirs) walk(dir, files);
+  const roots = input.dirs.map((dir) => path.resolve(dir));
+  for (const root of roots) collectFiles(root, files);
 
   const results: string[] = [];
   let count = 0;
@@ -122,7 +149,7 @@ function runNodeSearch(input: SearchInput, limit: number, mode: "lines" | "files
 
   for (const file of files.sort((a, b) => a.localeCompare(b))) {
     if (Date.now() > deadline) throw new Error("search timed out");
-    const relative = path.relative(input.dirs[0], file).replace(/\\/g, "/");
+    const relative = relativeDisplay(file, roots);
     if (!matchesGlob(relative, input.glob)) continue;
 
     let text: string;

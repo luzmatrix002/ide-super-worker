@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 export const DEFAULT_MODEL = "Qwen3.6-35B-A3B-APEX-I-Compact.gguf";
 export const DEFAULT_CLAUDE_CLI_MODEL = "sonnet";
-export const SERVER_VERSION = "2.4.0";
+export const SERVER_VERSION = "2.5.0";
 
 function readBooleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
@@ -115,14 +115,47 @@ export function getFallbackApiKey(): string | undefined {
   return raw && raw.trim() ? raw.trim() : undefined;
 }
 
+function readModelListEnv(name: string, max: number): string[] {
+  const raw = process.env[name];
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const item of raw.split(",")) {
+    const model = item.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    models.push(model);
+    if (models.length >= max) break;
+  }
+  return models;
+}
+
 export function getFallbackModel(): string | undefined {
+  const poolModel = readModelListEnv("FALLBACK_MODELS", 3)[0];
+  if (poolModel) return poolModel;
   const raw = process.env.FALLBACK_MODEL;
   return raw && raw.trim() ? raw.trim() : undefined;
 }
 
 export function getFallbackEscalateModel(): string | undefined {
+  const poolModel = readModelListEnv("FALLBACK_MODELS", 3)[1];
+  if (poolModel) return poolModel;
   const raw = process.env.FALLBACK_ESCALATE_MODEL;
   return raw && raw.trim() ? raw.trim() : undefined;
+}
+
+export function getFallbackModels(): string[] {
+  const explicitPool = readModelListEnv("FALLBACK_MODELS", 3);
+  if (explicitPool.length > 0) return explicitPool;
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const model of [process.env.FALLBACK_MODEL, process.env.FALLBACK_ESCALATE_MODEL]) {
+    const trimmed = model?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    models.push(trimmed);
+  }
+  return models;
 }
 
 export function fallbackConfigured(): boolean {
