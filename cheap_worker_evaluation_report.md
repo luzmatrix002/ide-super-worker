@@ -1,8 +1,8 @@
-# MCP-Codex-Worker Cheap Worker Reliability & Upgrade Evaluation Report
+# ide-super-worker Cheap Worker Reliability & Upgrade Evaluation Report
 
 ## 1. Executive Summary
 
-This report evaluates the feasibility, alignment, and implementation strategy of the proposed **Cheap Worker Reliability Upgrade Blueprint** (based on `cheap worker update.md` and the `tomicz/fable-5` methodology) within the existing **mcp-codex-worker-rewrite** codebase.
+This report evaluates the feasibility, alignment, and implementation strategy of the proposed **Cheap Worker Reliability Upgrade Blueprint** (based on `cheap worker update.md` and the `tomicz/fable-5` methodology) within the existing **ide-super-worker-rewrite** codebase.
 
 ### Key Finding
 **Highly Feasible and Structurally Aligned.**

@@ -5,9 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ReasoningReport } from "../reasoning.js";
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-codex-worker-test-root-"));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "ide-super-worker-test-root-"));
 const project = path.join(root, "project");
-const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-codex-worker-outside-"));
+const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ide-super-worker-outside-"));
 fs.mkdirSync(project);
 
 process.env.SANDBOX_ROOT = root;
@@ -494,12 +494,19 @@ assert.equal(
   }),
   "upstream_404"
 );
+toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "error",
+  { error_message: "fallback upstream returned 404 (first)" },
+  now.getTime()
+);
 const immediateCircuit = toolErrorControl.recordToolControlOutcome(
   "review",
   "review",
   "error",
-  { error_message: "fallback upstream returned 404" },
-  now.getTime()
+  { error_message: "fallback upstream returned 404 (second)" },
+  now.getTime() + 1
 );
 assert.equal(immediateCircuit.errorClass, "upstream_404");
 assert.equal(immediateCircuit.circuitOpened, true);
@@ -533,17 +540,65 @@ try {
   toolErrorControl.resetToolControlState();
 }
 
-const circuitStateFile = path.join(root, "tool-circuit-state.json");
-process.env.WORKER_TOOL_CIRCUIT_STATE_FILE = circuitStateFile;
-process.env.WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS = "0";
+process.env.WORKER_TOOL_CIRCUIT_EARLY_CLOSE_MS = "1000";
 try {
   toolErrorControl.resetToolControlState();
   toolErrorControl.recordToolControlOutcome(
     "review",
     "review",
     "error",
-    { error_message: "fallback upstream returned 404" },
+    { error_message: "fallback upstream returned 404 (early-close first)" },
     now.getTime()
+  );
+  toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "error",
+    { error_message: "fallback upstream returned 404 (early-close second)" },
+    now.getTime() + 1
+  );
+  assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 1)?.action, "degrade");
+  const tooEarlyClose = toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "ok",
+    {},
+    now.getTime() + 500
+  );
+  assert.equal(tooEarlyClose.circuitClosed, false);
+  assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 500)?.action, "degrade");
+  const earlyClose = toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "ok",
+    {},
+    now.getTime() + 2000
+  );
+  assert.equal(earlyClose.circuitClosed, true);
+  assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 2000), undefined);
+} finally {
+  delete process.env.WORKER_TOOL_CIRCUIT_EARLY_CLOSE_MS;
+  toolErrorControl.resetToolControlState();
+}
+
+const circuitStateFile = path.join(root, "tool-circuit-state.json");
+process.env.WORKER_TOOL_CIRCUIT_STATE_FILE = circuitStateFile;
+process.env.WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS = "0";
+try {
+    toolErrorControl.resetToolControlState();
+  toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "error",
+    { error_message: "fallback upstream returned 404 (first)" },
+    now.getTime()
+  );
+  toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "error",
+    { error_message: "fallback upstream returned 404 (second)" },
+    now.getTime() + 1
   );
   assert(fs.existsSync(circuitStateFile));
   const persistedCircuitState = JSON.parse(fs.readFileSync(circuitStateFile, "utf8"));
@@ -616,28 +671,70 @@ try {
   toolErrorControl.resetToolControlState({ persist: false });
   assert.equal(toolErrorControl.loadToolCircuitState({ force: true, now: now.getTime() }), 0);
   assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime()), undefined);
+    toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "error",
+    { error_message: "fallback upstream returned 404 after corrupt state (first)" },
+    now.getTime() + 1
+  );
   const postCorruptionOutcome = toolErrorControl.recordToolControlOutcome(
     "review",
     "review",
     "error",
-    { error_message: "fallback upstream returned 404 after corrupt state" },
-    now.getTime() + 1
+    { error_message: "fallback upstream returned 404 after corrupt state (second)" },
+    now.getTime() + 2
   );
   assert.equal(postCorruptionOutcome.circuitOpened, true);
-  assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 2)?.action, "degrade");
+  assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 3)?.action, "degrade");
 
   const staleLockFile = `${circuitStateFile}.lock`;
   fs.writeFileSync(staleLockFile, "stale lock", "utf8");
   fs.utimesSync(staleLockFile, new Date(now.getTime() - 120_000), new Date(now.getTime() - 120_000));
-  toolErrorControl.resetToolControlState({ persist: false });
+    toolErrorControl.resetToolControlState({ persist: false });
   toolErrorControl.recordToolControlOutcome(
     "review",
     "review",
     "error",
-    { error_message: "fallback upstream returned 404 after stale lock" },
-    now.getTime() + 3
+    { error_message: "fallback upstream returned 404 after stale lock (first)" },
+    now.getTime() + 4
+  );
+  toolErrorControl.recordToolControlOutcome(
+    "review",
+    "review",
+    "error",
+    { error_message: "fallback upstream returned 404 after stale lock (second)" },
+    now.getTime() + 5
   );
   assert.equal(fs.existsSync(staleLockFile), false);
+
+  const rootDir = path.parse(root).root;
+  const rootProbe = path.join(rootDir, `.ide-super-worker-state-probe-${process.pid}`);
+  const rootStateFile = `${rootProbe}.json`;
+  try {
+    fs.writeFileSync(rootProbe, "probe", "utf8");
+    fs.unlinkSync(rootProbe);
+    process.env.WORKER_TOOL_CIRCUIT_STATE_FILE = rootStateFile;
+        toolErrorControl.resetToolControlState();
+    toolErrorControl.recordToolControlOutcome(
+      "review",
+      "review",
+      "error",
+      { error_message: "fallback upstream returned 404 at root sidecar (first)" },
+      now.getTime() + 6
+    );
+    toolErrorControl.recordToolControlOutcome(
+      "review",
+      "review",
+      "error",
+      { error_message: "fallback upstream returned 404 at root sidecar (second)" },
+      now.getTime() + 7
+    );
+    assert(fs.existsSync(rootStateFile));
+    fs.unlinkSync(rootStateFile);
+  } catch {
+    console.log("[skip] root state sidecar test unavailable on this platform");
+  }
 } finally {
   delete process.env.WORKER_TOOL_CIRCUIT_STATE_FILE;
   delete process.env.WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS;
@@ -910,6 +1007,18 @@ const shellReceipt = shellDigestResult.receipt as any;
 assert(shellReceipt.artifact_refs.length > 0);
 const shellSlice = artifacts.getArtifactSlice({ artifact_ref: shellReceipt.artifact_refs[0], limit: 80 });
 assert(String(shellSlice.text).includes("worker-shell-ok"));
+const shellLargeOutputResult = await workerTools.runWorkerShell({
+  cwd: project,
+  command: `"${process.execPath}" -e "process.stdout.write('x'.repeat(33000))"`,
+  timeout_ms: 30_000
+});
+assert.equal(shellLargeOutputResult.status, "passed");
+assert.equal(String(shellLargeOutputResult.output).length, 33000);
+const shellLargeOutputReceipt = shellLargeOutputResult.receipt as any;
+assert(shellLargeOutputReceipt.output_bytes > 32_000);
+assert(shellLargeOutputReceipt.artifact_refs.length > 0);
+const shellLargeOutputSlice = artifacts.getArtifactSlice({ artifact_ref: shellLargeOutputReceipt.artifact_refs[0], limit: 16 });
+assert.equal(String(shellLargeOutputSlice.text), "xxxxxxxxxxxxxxxx");
 assert.equal(workerTools.shouldAutoReroutePowerShellCommand("Get-Content package.json"), process.platform === "win32");
 assert(workerTools.powershellRerouteCommand("Write-Output worker-powershell-reroute").includes("powershell -NoProfile"));
 if (process.platform === "win32") {

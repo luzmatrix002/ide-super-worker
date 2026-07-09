@@ -13,6 +13,7 @@ const PACK_FILE_MAX_BYTES = 120_000;
 const PACK_TOTAL_MAX_BYTES = 500_000;
 const PACK_MAX_FILES = 50;
 const COMMAND_OUTPUT_MAX = 200_000;
+const RECEIPT_ARTIFACT_MIN_BYTES = 32_000;
 
 function truncateBytes(text: string, maxBytes: number, label: string): string {
   const safe = redactSecrets(text);
@@ -445,8 +446,10 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
   }
 
   const responseOutput = args.digest === true ? truncateBytes(output, CHECK_OUTPUT_RESPONSE_MAX, "command output") : output;
+  const outputBytes = Buffer.byteLength(output, "utf8");
+  const responseOutputBytes = Buffer.byteLength(responseOutput, "utf8");
   const artifact =
-    digestRequested || Buffer.byteLength(output, "utf8") > Buffer.byteLength(responseOutput, "utf8")
+    digestRequested || outputBytes > responseOutputBytes || outputBytes > RECEIPT_ARTIFACT_MIN_BYTES
       ? saveArtifact("shell", output)
       : undefined;
   const commandStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
@@ -486,7 +489,7 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     input: args,
     output,
     artifactRefs: artifact ? [artifact.artifact_ref] : [],
-    truncated: Buffer.byteLength(output, "utf8") > Buffer.byteLength(responseOutput, "utf8"),
+    truncated: outputBytes > responseOutputBytes,
     status: commandStatus === "passed" ? "ok" : "error"
   });
 }

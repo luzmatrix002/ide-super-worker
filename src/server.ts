@@ -1806,6 +1806,7 @@ export function createCodexWorkerServer(): Server {
           ...metricExtra,
           ...(controlOutcome.errorClass ? { tool_error_class: controlOutcome.errorClass } : {}),
           ...(controlOutcome.circuitOpened ? { circuit_opened: true } : {}),
+          ...(controlOutcome.circuitClosed ? { circuit_closed: true } : {}),
           ...(name === "diff_digest" ? { red_team: toolArgs.red_team === true || toolArgs.lite_review === true } : {})
         });
       }

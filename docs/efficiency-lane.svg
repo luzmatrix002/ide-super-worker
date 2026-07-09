@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
-  <title id="title">MCP Codex Worker efficiency lane</title>
-  <desc id="desc">A before and after diagram showing direct AI coding workflows burning premium context while MCP Codex Worker routes search, read-only analysis, implementation loops, checks, and compact evidence through a faster cheaper lane.</desc>
+  <title id="title">IDE Super Worker efficiency lane</title>
+  <desc id="desc">A before and after diagram showing direct AI coding workflows burning premium context while IDE Super Worker routes search, read-only analysis, implementation loops, checks, and compact evidence through a faster cheaper lane.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#f8fbff"/>
@@ -58,7 +58,7 @@
   <g transform="translate(628 170)">
     <rect x="0" y="0" width="500" height="390" rx="14" fill="#fff" stroke="#d7eee8" filter="url(#shadow)"/>
     <rect x="0" y="0" width="500" height="56" rx="14" fill="#0f766e"/>
-    <text x="24" y="36" class="label">MCP Codex Worker flow</text>
+    <text x="24" y="36" class="label">IDE Super Worker flow</text>
 
     <rect x="34" y="92" width="134" height="70" rx="10" fill="#eefaf7" stroke="#9ed9cc"/>
     <text x="58" y="122" class="boxTitle">Codex</text>

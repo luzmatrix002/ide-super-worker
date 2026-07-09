@@ -97,7 +97,7 @@ async function checkAdapter(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log("[Doctor] MCP Codex Worker");
+  console.log("[Doctor] IDE Super Worker");
   console.log(`  server version: ${SERVER_VERSION}`);
   console.log(`  sandbox root: ${SANDBOX_ROOT}`);
   console.log(`  claude command: ${resolveClaudeCommand()}`);

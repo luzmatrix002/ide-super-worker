@@ -1,6 +1,13 @@
 # Release Checklist
 
 - [ ] `README.md` has no private paths, provider keys, or personal gateway URLs.
+- [ ] `README.md` has an Attribution section crediting external sources.
+- [ ] `LICENSE` copyright holder is specific (not generic "contributors").
+- [ ] `CODE_OF_CONDUCT.md` exists.
+- [ ] `.github/ISSUE_TEMPLATE/` includes bug, feature, and plagiarism report templates.
+- [ ] `.github/PULL_REQUEST_TEMPLATE.md` includes originality declaration.
+- [ ] `.github/workflows/ci.yml` exists and passes.
+- [ ] `.github/CODEOWNERS` is set.
 - [ ] `codex-mcp.example.toml` uses placeholders only.
 - [ ] `.env` is not tracked.
 - [ ] `node_modules/`, `dist/`, logs, and archives are not tracked.
@@ -12,3 +19,4 @@
 - [ ] GitHub repository description and topics are set.
 - [ ] First release notes mention current limitations and network credential requirements.
 - [ ] Any token pasted during setup has been revoked and replaced.
+- [ ] No code in the release is copied from other projects without attribution.

@@ -1,4 +1,4 @@
-# AGENTS.md - Codex Worker Routing Rules
+# AGENTS.md - IDE Super Worker Routing Rules
 
 This repository exists to reduce premium Codex context usage. Treat worker
 routing as part of the task, not as an optional optimization.

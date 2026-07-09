@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for improving `mcp-codex-worker`.
+Thanks for improving `ide-super-worker`.
 
 ## Development
 
@@ -20,6 +20,16 @@ npm run smoke
 - Do not commit `.env`, generated archives, `node_modules`, or private gateway URLs.
 - Run `npm run build`, `npm run test`, and `npm run smoke`.
 - Mention any network-only checks that could not be run.
+
+## Originality Policy
+
+- All submitted code must be your own original work, or clearly attributed to
+  its source with proper license compliance.
+- Do not copy code from other projects without verifying license compatibility
+  and adding attribution comments.
+- If you adapt an algorithm or pattern from a paper or external source, cite it
+  in a code comment (see `src/reasoning.ts` for an example).
+- PRs that appear to contain plagiarized code will be rejected.
 
 ## Design Principles
 

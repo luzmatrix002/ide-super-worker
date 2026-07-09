@@ -154,7 +154,7 @@ function circuitWindowMs(): number {
 }
 
 function circuitOpenMs(): number {
-  return boundedIntegerEnv("WORKER_TOOL_CIRCUIT_OPEN_MS", 10 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
+  return boundedIntegerEnv("WORKER_TOOL_CIRCUIT_OPEN_MS", 5 * 60 * 1000, 10_000, 24 * 60 * 60 * 1000);
 }
 
 function circuitMinCalls(): number {
@@ -166,17 +166,21 @@ function circuitMinErrors(): number {
 }
 
 function errorClassCircuitMinErrors(): number {
-  return boundedIntegerEnv("WORKER_TOOL_ERROR_CLASS_CIRCUIT_MIN_ERRORS", 1, 1, 1_000_000);
+  return boundedIntegerEnv("WORKER_TOOL_ERROR_CLASS_CIRCUIT_MIN_ERRORS", 2, 1, 1_000_000);
 }
 
 function immediateCircuitClasses(): Set<ToolErrorClass> {
-  const raw = process.env.WORKER_TOOL_CIRCUIT_IMMEDIATE_CLASSES || "upstream_404,search_timeout,shell_mismatch";
+  const raw = process.env.WORKER_TOOL_CIRCUIT_IMMEDIATE_CLASSES || "upstream_404,shell_mismatch";
   return new Set(
     raw
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean) as ToolErrorClass[]
   );
+}
+
+function circuitEarlyCloseMs(): number {
+  return boundedIntegerEnv("WORKER_TOOL_CIRCUIT_EARLY_CLOSE_MS", 30_000, 0, 60 * 60 * 1000);
 }
 
 function circuitStateEventMax(): number {
@@ -285,12 +289,18 @@ function liveToolControlEvents(now: number): ToolControlEvent[] {
     .slice(-maxEvents);
 }
 
+function ensureCircuitStateParentDir(file: string): void {
+  const dir = path.dirname(file);
+  if (dir === path.parse(dir).root) return;
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
 function persistToolCircuitState(now = Date.now(), options: { force?: boolean; reason?: string } = {}): void {
   const file = toolCircuitStateFile();
   if (!file) return;
   if (!options.force && now - lastCircuitStateSaveAt < circuitStateSaveMinMs()) return;
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    ensureCircuitStateParentDir(file);
     const liveCircuits = [...openCircuits.values()].filter((circuit) => circuit.expiresAt > now);
     const payloadBody: Omit<PersistedToolCircuitState, "checksum"> = {
       version: 2,
@@ -551,21 +561,45 @@ function maybeOpenCircuit(tool: string, category: string, errorClass: ToolErrorC
   return undefined;
 }
 
+function maybeCloseCircuit(tool: string, now: number): boolean {
+  if (!circuitEnabled()) return false;
+  const earlyCloseMs = circuitEarlyCloseMs();
+  let closed = false;
+  for (const [key, circuit] of openCircuits.entries()) {
+    if (circuit.tool !== tool) continue;
+    if (now - circuit.openedAt < earlyCloseMs) continue;
+    openCircuits.delete(key);
+    closed = true;
+    appendMetrics({
+      event: "tool_circuit_close",
+      route: "worker",
+      tool,
+      circuit_key: key,
+      reason: "successful_call_after_early_close_window",
+      opened_at: new Date(circuit.openedAt).toISOString(),
+      closed_at: new Date(now).toISOString()
+    });
+  }
+  if (closed) persistToolCircuitState(now, { force: true, reason: "circuit_early_close" });
+  return closed;
+}
+
 export function recordToolControlOutcome(
   tool: string,
   category: WorkerCategory | string,
   status: MetricStatus,
   extra: Record<string, unknown> = {},
   now = Date.now()
-): { errorClass?: ToolErrorClass; circuitOpened?: boolean } {
+): { errorClass?: ToolErrorClass; circuitOpened?: boolean; circuitClosed?: boolean } {
   pruneToolControl(now);
   if (!circuitEnabled()) return {};
   if (status === "rejected") return {};
   const errorClass = status === "error" ? detectToolErrorClass(tool, String(category), extra) : undefined;
   toolControlEvents.push({ ts: now, tool, category: String(category), status, errorClass });
   const circuit = status === "error" ? maybeOpenCircuit(tool, String(category), errorClass, now) : undefined;
-  persistToolCircuitState(now, { force: status === "error", reason: status === "error" ? "tool_error" : "tool_outcome" });
-  return { errorClass, circuitOpened: Boolean(circuit) };
+  const circuitClosed = status === "ok" ? maybeCloseCircuit(tool, now) : false;
+  persistToolCircuitState(now, { force: status === "error" || circuitClosed, reason: status === "error" ? "tool_error" : circuitClosed ? "circuit_early_close" : "tool_outcome" });
+  return { errorClass, circuitOpened: Boolean(circuit), circuitClosed };
 }
 
 export function getToolControlDecision(

@@ -26,7 +26,7 @@ function byteLength(value: unknown): number {
 
 function artifactDir(): string {
   const sandboxHash = crypto.createHash("sha256").update(path.resolve(SANDBOX_ROOT)).digest("hex").slice(0, 16);
-  const dir = path.join(os.tmpdir(), "mcp-codex-worker-artifacts", sandboxHash, String(process.pid));
+  const dir = path.join(os.tmpdir(), "ide-super-worker-artifacts", sandboxHash, String(process.pid));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

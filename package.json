@@ -1,5 +1,5 @@
 {
-  "name": "mcp-codex-worker",
+  "name": "ide-super-worker",
   "version": "2.5.0",
   "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
   "type": "module",
@@ -37,10 +37,21 @@
     "LICENSE",
     "SECURITY.md",
     "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
     "PROMO.md",
     "RELEASE_CHECKLIST.md",
     "codex-mcp.example.toml",
     "docs",
     ".env.example"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luzmatrix002/ide-super-worker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/luzmatrix002/ide-super-worker/issues"
+  },
+  "homepage": "https://github.com/luzmatrix002/ide-super-worker#readme",
+  "author": "luzmatrix002",
+  "license": "MIT"
 }

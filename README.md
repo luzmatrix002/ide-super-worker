@@ -1,10 +1,10 @@
-# MCP Codex Worker
+# IDE Super Worker
 
 Stop spending premium Codex context on bulk code reading, patch loops, and giant diffs.
 
-`mcp-codex-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
+`ide-super-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
 
-![MCP Codex Worker efficiency lane](docs/efficiency-lane.svg)
+![IDE Super Worker efficiency lane](docs/efficiency-lane.svg)
 
 ## Efficiency First
 
@@ -35,7 +35,7 @@ With this worker, Codex delegates the noisy middle:
 
 ```mermaid
 flowchart LR
-  A["Codex<br/>planner and reviewer"] -->|"small MCP start request"| B["MCP Codex Worker"]
+  A["Codex<br/>planner and reviewer"] -->|"small MCP start request"| B["IDE Super Worker"]
   B -->|"launches"| C["Claude Code CLI<br/>background job"]
   C -->|"Anthropic messages"| D["Local adapter"]
   D -->|"OpenAI-compatible chat"| E["Cheap gateway model<br/>DeepSeek / OneAPI / New API"]
@@ -79,7 +79,7 @@ This project gives you the missing plumbing:
 
 ## Efficiency Comparison
 
-| Workflow | What usually happens | Efficiency gap | MCP Codex Worker path |
+| Workflow | What usually happens | Efficiency gap | IDE Super Worker path |
 | --- | --- | --- | --- |
 | Direct premium-agent coding | The main agent reads files, retries fixes, sees every test log, and ingests large diffs. | Premium context becomes the workspace transcript. | Codex sends one small task; worker returns changed files, checks, logs, and optional diff. |
 | Generic cheaper-model wrapper | A cheaper model runs, but the main agent still needs bulky context and manual verification. | Lower model price, same noisy workflow. | Cheap gateway handles bulk tokens; scoped checks and compact results decide whether work is trustworthy. |
@@ -168,8 +168,8 @@ Copy and adapt `codex-mcp.example.toml` into your Codex config.
 ```toml
 [mcp_servers.codex_async_worker]
 command = "node"
-args = ["D:/path/to/mcp-codex-worker/dist/index.js"]
-cwd = "D:/path/to/mcp-codex-worker"
+args = ["D:/path/to/ide-super-worker/dist/index.js"]
+cwd = "D:/path/to/ide-super-worker"
 startup_timeout_sec = 10
 tool_timeout_sec = 3600
 env = { SANDBOX_ROOT = "D:/workspaces", ONEAPI_BASE_URL = "https://your-gateway.example.com/v1", CLAUDE_MODEL = "deepseek-v4-flash", CLAUDE_CODE_MODEL = "sonnet", CLAUDE_PERMISSION_MODE = "acceptEdits", USE_OPENAI_ADAPTER = "1", WAIT_DEFAULT_MS = "1800000" }
@@ -363,3 +363,18 @@ Use this worker for:
 - background implementation while Codex continues planning/reviewing.
 
 Keep the main Codex thread for high-level decisions, code review, final integration, and tasks that require your most capable model directly.
+
+## Attribution
+
+This project builds on ideas from several sources:
+
+- **Latent-recurrent reasoning depth** — Geiping et al., 2025. The deterministic relaxation approach in `src/reasoning.ts` adapts the "relax a belief toward a fixed point" idea to code-worker execution signals (checks, scope, exit code, diff, stderr).
+- **Mythos reasoning architecture** — The plan → recurrent depth → verify → calibrate → contradiction → gate pipeline is a self-contained port adapted to concrete execution signals. The code runs no LLM and makes no network calls.
+- **Claude Code** by Anthropic — used as the background execution engine for worker jobs.
+- **Model Context Protocol (MCP)** — the open protocol this worker implements.
+
+All source code in this repository is original work by the project maintainer. The adapted algorithms are clearly documented in code comments with their origin.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

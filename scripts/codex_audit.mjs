@@ -172,7 +172,7 @@ for (const category of requiredCategories) {
   if (!categories.has(category)) warnings.push(`no recent worker audit evidence for category: ${category}`);
 }
 
-console.log(`Codex worker audit window: ${sinceMinutes} minutes`);
+console.log(`IDE Super Worker audit window: ${sinceMinutes} minutes`);
 console.log(`metrics_file: ${metricsFile || "(missing)"}`);
 console.log(`rows: ${rows.length}`);
 console.log(`upstream_calls: ${upstreamRows.length}`);

@@ -2,7 +2,7 @@
 
 ## Latest Release Angle
 
-MCP Codex Worker 2.5.0 is now focused on one practical promise: keep Codex on the high-value planning and review path, and push bulky code-reading, repair, checks, review, and failure diagnosis into a cheaper worker lane.
+IDE Super Worker 2.5.0 is now focused on one practical promise: keep Codex on the high-value planning and review path, and push bulky code-reading, repair, checks, review, and failure diagnosis into a cheaper worker lane.
 
 The current build adds:
 
@@ -32,13 +32,13 @@ Make Codex stop eating giant diffs: delegate heavy code work to a cheaper async 
 
 Use this GitHub-ready visual when posting or embedding the project:
 
-![MCP Codex Worker efficiency lane](docs/efficiency-lane.svg)
+![IDE Super Worker efficiency lane](docs/efficiency-lane.svg)
 
 ## Short Pitch
 
 Codex is excellent at orchestration and review. It is wasteful to make the main thread ingest every file read, every failed repair attempt, and every huge diff.
 
-MCP Codex Worker adds a cheaper background lane. Codex sends a small MCP request, Claude Code runs the task locally, the adapter routes model calls to an OpenAI-compatible gateway, and Codex gets back the clean part: changed files, checks, logs, and an optional diff.
+IDE Super Worker adds a cheaper background lane. Codex sends a small MCP request, Claude Code runs the task locally, the adapter routes model calls to an OpenAI-compatible gateway, and Codex gets back the clean part: changed files, checks, logs, and an optional diff.
 
 It is built for people who want more AI coding throughput without turning every subtask into a premium-context bonfire.
 
@@ -46,9 +46,9 @@ It is built for people who want more AI coding throughput without turning every 
 
 The stronger claim is not only "cheaper model." It is "shorter route."
 
-MCP Codex Worker keeps each class of work in its cheapest safe lane:
+IDE Super Worker keeps each class of work in its cheapest safe lane:
 
-| Work type | Common competing flow | MCP Codex Worker flow |
+| Work type | Common competing flow | IDE Super Worker flow |
 | --- | --- | --- |
 | Find code | Ask an agent to search and summarize. | `search` does bounded local repo search with 0 LLM calls. |
 | Explain files | Start a full edit-capable agent loop. | `analyze` reads sandboxed files and makes one cheap gateway call. |
@@ -129,7 +129,7 @@ flowchart LR
 
 ## English Launch Copy
 
-I built MCP Codex Worker to keep Codex out of the noisy middle of coding tasks.
+I built IDE Super Worker to keep Codex out of the noisy middle of coding tasks.
 
 Codex is best at planning, deciding, and reviewing. It is expensive to make the main thread read every file, watch every failed fix, ingest every test log, and digest every large patch.
 
@@ -163,7 +163,7 @@ The pitch is simple: keep the expensive brain clean; move repetitive muscle work
 
 Use one of these snippets when you need the efficiency angle to land quickly:
 
-1. Most AI coding setups make the best model do everything: search, read, edit, retry, test, and digest the diff. MCP Codex Worker splits the route so Codex only handles the decisions.
+1. Most AI coding setups make the best model do everything: search, read, edit, retry, test, and digest the diff. IDE Super Worker splits the route so Codex only handles the decisions.
 2. A cheaper model wrapper lowers unit price, but it does not fix workflow waste. This worker removes waste first: zero-LLM search, one-call read-only analysis, async implementation, compact evidence.
 3. The main speedup is not magic. It is queue discipline: discovery stays local, summaries stay cheap, repair loops run in the background, and Codex reviews only the proof.
 4. Instead of asking a premium agent to watch every step, make it inspect the receipt: changed files, checks, logs, optional diff.
