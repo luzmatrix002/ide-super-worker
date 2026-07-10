@@ -235,6 +235,22 @@ const strictReady = reliability.buildReliabilityProfile({
 });
 assert.equal(strictReady.missing_gates.length, 0);
 assert.equal(reliability.reliabilityRejectionReason(strictReady), undefined);
+const semanticPending = reliability.buildReliabilityProfile({
+  reliability_tier: "critical",
+  semantic_gate: "required"
+});
+assert(!semanticPending.satisfied_gates.includes("semantic_gate"));
+assert(semanticPending.missing_gates.includes("semantic_gate"));
+const semanticPassed = reliability.buildReliabilityProfile(
+  { reliability_tier: "critical", semantic_gate: "required" },
+  { semanticReviewPassed: true }
+);
+assert(semanticPassed.satisfied_gates.includes("semantic_gate"));
+const standardSemanticPending = reliability.buildReliabilityProfile({
+  reliability_tier: "standard",
+  semantic_gate: "required"
+});
+assert(standardSemanticPending.missing_gates.includes("semantic_gate"));
 const criticalEpisode = reliability.buildEpisodeSummary({
   job_id: "episode-1",
   profile: reliability.buildReliabilityProfile({ reliability_tier: "critical" }),

@@ -1,6 +1,6 @@
 {
   "name": "ide-super-worker",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,11 +14,17 @@
     "doctor:network": "tsx src/doctor.ts --network",
     "codex:audit": "node scripts/codex_audit.mjs",
     "codex:guard": "npm run codex:audit -- --since-minutes=60 && npm run stats:gate",
+    "eval:contracts": "npm run build && node scripts/eval_contracts.mjs",
+    "eval:fixtures": "node scripts/eval_fixtures.mjs",
+    "eval:gate": "node scripts/eval_gate.mjs",
+    "eval:formal": "node scripts/eval_formal.mjs",
+    "promo:dry-run": "tsx src/promo_publish.ts",
+    "promo:publish": "tsx src/promo_publish.ts --execute",
     "skills:validate": "node scripts/validate_skills.mjs",
     "stats": "node scripts/stats.mjs",
     "stats:gate": "node scripts/stats.mjs --gate --since-minutes=60",
     "smoke": "npm run build && node dist/smoke_test.js",
-    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js"
+    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
@@ -41,6 +47,8 @@
     "PROMO.md",
     "RELEASE_CHECKLIST.md",
     "codex-mcp.example.toml",
+    "scripts",
+    "eval",
     "docs",
     ".env.example"
   ],

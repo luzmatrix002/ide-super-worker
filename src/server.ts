@@ -36,6 +36,16 @@ import {
   setTerminalStatus
 } from "./jobs.js";
 import { appendToolMetric, type WorkerCategory } from "./metrics.js";
+import {
+  assertOutcomeTransition,
+  createFailedOutcome,
+  createRejectedOutcome,
+  createRunningOutcome,
+  resolveOutcome,
+  type OutcomeV1,
+  type SemanticReviewAttemptStatusV1,
+  type VerificationPolicyV1
+} from "./outcome.js";
 import { killProcessTree } from "./process.js";
 import { assess, buildRevisePrompt, isStalled, type JobSignals, type ReasoningReport } from "./reasoning.js";
 import {
@@ -48,6 +58,7 @@ import {
 import { redactSecrets } from "./redact.js";
 import { searchWorkspace } from "./search.js";
 import { validateAllowedDirs, validateScopedPatch } from "./security.js";
+import { runSemanticReview, type SemanticReviewResult } from "./semantic_review.js";
 import {
   getToolControlDecision,
   getToolErrorControlStartDefaults,
@@ -72,6 +83,8 @@ import {
   runWorkerShell
 } from "./worker_tools.js";
 import type { CheckCommand, JobState, StageInput, StageResult, StartJobInput } from "./types.js";
+
+const OUTCOME_CONTRACT_VERSION = "outcome.v1" as const;
 
 function okJson(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -178,7 +191,7 @@ function fallbackForTool(tool: string, message: string): Record<string, unknown>
 export function toolFailureJson(tool: string, category: string, input: Record<string, unknown>, error: unknown) {
   const compact = compactMetricError(error);
   const fallback = fallbackForTool(tool, compact.error_message);
-  const payload = {
+  const legacyPayload = {
     status: "error",
     tool,
     category,
@@ -189,20 +202,25 @@ export function toolFailureJson(tool: string, category: string, input: Record<st
     fallback,
     required_action: fallback.action
   };
-  return attachReceipt(payload, {
+  const payload = attachReceipt(legacyPayload, {
     tool,
     category,
     input,
-    output: payload,
+    output: legacyPayload,
     summary: {
-      status: payload.status,
+      status: legacyPayload.status,
       tool,
       category,
-      error: payload.error,
+      error: legacyPayload.error,
       fallback
     },
     status: "error"
   });
+  return {
+    contract_version: OUTCOME_CONTRACT_VERSION,
+    outcome: createFailedOutcome("tool_execution_failed"),
+    ...payload
+  };
 }
 
 function rejectedJson(
@@ -211,19 +229,21 @@ function rejectedJson(
   input: Record<string, unknown>,
   reason: string,
   requiredAction: string,
-  alternatives: string[] = ["start"]
+  alternatives: string[] = ["start"],
+  outcome: OutcomeV1 = createRejectedOutcome("request_rejected", true)
 ) {
-  return attachReceipt(
-    {
-      status: "rejected",
-      reason,
-      required_action: requiredAction,
-      fallback: {
-        retryable: true,
-        action: requiredAction,
-        alternatives
-      }
-    },
+  const legacyPayload = {
+    status: "rejected",
+    reason,
+    required_action: requiredAction,
+    fallback: {
+      retryable: true,
+      action: requiredAction,
+      alternatives
+    }
+  };
+  const payload = attachReceipt(
+    legacyPayload,
     {
       tool,
       category,
@@ -231,6 +251,7 @@ function rejectedJson(
       output: { status: "rejected", reason, required_action: requiredAction }
     }
   );
+  return { contract_version: OUTCOME_CONTRACT_VERSION, outcome, ...payload };
 }
 
 type ToolMetricStatus = "ok" | "error" | "rejected";
@@ -254,7 +275,15 @@ export function workerMetricStatusFromPayload(value: unknown): { status: ToolMet
   const receipt = payload?.receipt;
   if (!receipt) return { status: "ok", extra: {} };
 
-  const extra = receiptMetricExtra(receipt);
+  const outcome = payload?.outcome;
+  const extra = {
+    ...receiptMetricExtra(receipt),
+    ...(typeof outcome?.status === "string" ? { outcome_status: outcome.status } : {}),
+    ...(Array.isArray(outcome?.reason_codes) ? { outcome_reason_codes: outcome.reason_codes } : {}),
+    ...(typeof outcome?.verification?.semantic === "string"
+      ? { verification_semantic: outcome.verification.semantic }
+      : {})
+  };
   const payloadStatus = typeof payload.status === "string" ? payload.status : undefined;
   const jobStatus = typeof payload.job_status === "string" ? payload.job_status : payloadStatus;
   if (payloadStatus === "rejected") return { status: "rejected", extra };
@@ -324,6 +353,19 @@ function toScopedPatchInput(scopedPatch: ReturnType<typeof validateScopedPatch>)
   return scopedPatch ? { paths: scopedPatch.relativePaths, max_diff_bytes: scopedPatch.maxDiffBytes } : undefined;
 }
 
+export function parseVerificationPolicy(value: unknown): VerificationPolicyV1 | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("verification_policy must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (record.version !== 1) throw new Error("verification_policy.version must be 1");
+  if (record.task_kind !== "read_only" && record.task_kind !== "modifying") {
+    throw new Error("verification_policy.task_kind must be read_only or modifying");
+  }
+  return { version: 1, task_kind: record.task_kind };
+}
+
 function parseStages(value: unknown, baseDir: string): StageInput[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value) || value.length === 0) {
@@ -361,6 +403,7 @@ function toStartInput(args: Record<string, unknown>): StartJobInput {
   return {
     prompt,
     allowed_dirs: allowedDirs,
+    verification_policy: parseVerificationPolicy(args.verification_policy),
     model: typeof args.model === "string" ? args.model : undefined,
     permission_mode: typeof args.permission_mode === "string" ? (args.permission_mode as StartJobInput["permission_mode"]) : undefined,
     allowed_tools: Array.isArray(args.allowed_tools) ? args.allowed_tools.map(String) : undefined,
@@ -407,6 +450,7 @@ function compactReasoning(report: ReasoningReport | undefined) {
 }
 
 export function publicJob(job: JobState, includeDiff = job.launchInput.include_diff ?? INCLUDE_DIFF_DEFAULT, verbose = false, tool = "get") {
+  const outcome = structuredClone(job.outcome);
   const checks = verbose
     ? job.result.checks || []
     : (job.result.checks || []).map((line) => truncateResponseText(line, CHECK_OUTPUT_RESPONSE_MAX));
@@ -447,7 +491,7 @@ export function publicJob(job: JobState, includeDiff = job.launchInput.include_d
     duration_ms: job.result.duration_ms,
     total_cost_usd: job.result.total_cost_usd
   };
-  const artifactPayload = {
+  const legacyArtifactPayload = {
     job_id: job.id,
     status: job.status,
     checks: job.result.checks || [],
@@ -458,18 +502,26 @@ export function publicJob(job: JobState, includeDiff = job.launchInput.include_d
     reliability,
     episode
   };
-  const artifact = saveArtifact("job_result", artifactPayload);
+  const artifact = saveArtifact("job_result", {
+    ...legacyArtifactPayload,
+    contract_version: OUTCOME_CONTRACT_VERSION,
+    outcome
+  });
+  if (artifact && outcome.evidence.artifact_refs.length === 0) {
+    outcome.evidence.artifact_refs = [artifact.artifact_ref];
+    job.outcome.evidence.artifact_refs = [artifact.artifact_ref];
+  }
   const receipt = createReceipt({
     tool,
     category: "job_control",
     input: { job_id: job.id, verbose, include_diff: includeDiff },
-    output: artifactPayload,
+    output: legacyArtifactPayload,
     summary: baseCompact,
     artifactRefs: artifact ? [artifact.artifact_ref] : [],
     truncated: !verbose || !includeDiff,
     status: job.status === "failed" ? "error" : "ok"
   });
-  const compact = { ...baseCompact, receipt };
+  const compact = { contract_version: OUTCOME_CONTRACT_VERSION, outcome, ...baseCompact, receipt };
   if (job.stages?.length) {
     (compact as Record<string, unknown>).stage_index = job.stageIndex;
     (compact as Record<string, unknown>).stage_results = job.stageResults;
@@ -516,7 +568,10 @@ export function preflightStartRejection(args: Record<string, unknown>) {
       "Use permission_mode=acceptEdits, auto, default, dontAsk, or plan; set ALLOW_BYPASS_PERMISSIONS=1 only when this workspace intentionally permits bypass."
     );
   }
-  const reliability = buildReliabilityProfile({ ...args, ...normalizeReliabilityArgs(args) } as Partial<StartJobInput>);
+  const reliability = buildReliabilityProfile(
+    { ...args, ...normalizeReliabilityArgs(args) } as Partial<StartJobInput>,
+    { worktree: (process.env.WORKER_ISOLATION || "").toLowerCase() === "worktree" }
+  );
   const reliabilityReason = reliabilityRejectionReason(reliability);
   if (reliabilityReason) {
     return rejectedJson(
@@ -720,16 +775,19 @@ async function degradedByToolControl(
     }
   }
 
-  return attachReceipt(
-    {
-      status: "rejected",
-      reason: decision.reason,
-      required_action: decision.requiredAction,
-      fallback: { retryable: true, action: decision.requiredAction, alternatives: decision.alternatives },
-      tool_control: base.tool_control
-    },
-    { tool, category, input: args, output: base }
-  );
+  const legacyPayload = {
+    status: "rejected",
+    reason: decision.reason,
+    required_action: decision.requiredAction,
+    fallback: { retryable: true, action: decision.requiredAction, alternatives: decision.alternatives },
+    tool_control: base.tool_control
+  };
+  const payload = attachReceipt(legacyPayload, { tool, category, input: args, output: base });
+  return {
+    contract_version: OUTCOME_CONTRACT_VERSION,
+    outcome: createRejectedOutcome("route_unavailable", true),
+    ...payload
+  };
 }
 
 function failureEvidence(evaluation: JobEvaluation): string {
@@ -807,21 +865,40 @@ function spawnClaude(jobId: string, job: JobState, launch: ClaudeLaunchPlan): bo
   return true;
 }
 
-interface JobEvaluation {
+export interface JobEvaluation {
   finalStatus: "completed" | "failed";
   checkLines: string[];
+  checkResults: CheckResult[];
   changedFiles: string[];
   diff: string;
   signals: JobSignals;
 }
 
 /** Collect the workspace summary, run checks, and assemble the auditable execution signals. */
-async function evaluateJob(job: JobState, code: number | null, signal: NodeJS.Signals | null): Promise<JobEvaluation> {
+export async function evaluateJob(
+  job: JobState,
+  code: number | null,
+  signal: NodeJS.Signals | null
+): Promise<JobEvaluation> {
+  let finalStatus: "completed" | "failed" = code === 0 ? "completed" : "failed";
+  let checkResults: CheckResult[] = [];
+  const commandCheckLines: string[] = [];
+  if (job.checks.length > 0) {
+    const results = await runCheckCommands(job.cwd, job.checks);
+    commandCheckLines.push(...results.lines);
+    checkResults = results.results;
+    if (results.failed) {
+      finalStatus = "failed";
+    }
+  }
+
+  // Checks can generate, revert, stage, or otherwise mutate files. Acceptance,
+  // scope enforcement, public diffs, and reasoning must all observe the final
+  // post-check tree rather than the executor-only snapshot.
   const scopedSummary = collectWorkspaceSummary(job.cwd, job.scopedPatch);
   const outOfScopeChanges = findOutOfScopeChanges(job.cwd, job.scopedPatch);
   const checkLines = [...scopedSummary.checks];
   const isGitRepo = !scopedSummary.checks.some((line) => line.startsWith("git summary skipped"));
-  let finalStatus: "completed" | "failed" = code === 0 ? "completed" : "failed";
 
   if (job.preexistingChangedFiles.length > 0) {
     checkLines.push(`preexisting changes before worker: ${job.preexistingChangedFiles.join(", ")}`);
@@ -833,16 +910,7 @@ async function evaluateJob(job: JobState, code: number | null, signal: NodeJS.Si
   } else if (job.scopedPatch?.relativePaths.length) {
     checkLines.push(`scoped_patch: passed (${job.scopedPatch.relativePaths.join(", ")})`);
   }
-
-  let checkResults: CheckResult[] = [];
-  if (job.checks.length > 0) {
-    const results = await runCheckCommands(job.cwd, job.checks);
-    checkLines.push(...results.lines);
-    checkResults = results.results;
-    if (results.failed) {
-      finalStatus = "failed";
-    }
-  }
+  checkLines.push(...commandCheckLines);
 
   const signals: JobSignals = {
     task: job.originalPrompt,
@@ -857,20 +925,152 @@ async function evaluateJob(job: JobState, code: number | null, signal: NodeJS.Si
     errorLines: job.logBuffer.filter((line) => line.startsWith("[stderr]") || line.startsWith("[error]"))
   };
 
-  return { finalStatus, checkLines, changedFiles: scopedSummary.changed_files, diff: scopedSummary.diff, signals };
+  return {
+    finalStatus,
+    checkLines,
+    checkResults,
+    changedFiles: scopedSummary.changed_files,
+    diff: scopedSummary.diff,
+    signals
+  };
+}
+
+type SemanticReviewRunner = (input: Parameters<typeof runSemanticReview>[0]) => Promise<SemanticReviewResult>;
+
+function semanticAttemptStatus(result: SemanticReviewResult): SemanticReviewAttemptStatusV1 {
+  if (result.status === "reviewed") return "completed";
+  if (result.reason_code === "semantic_review_timeout") return "timed_out";
+  if (result.status === "inconclusive") return "unparsed";
+  return "unavailable";
+}
+
+function reviewInputWasTruncated(evaluation: JobEvaluation): boolean {
+  return (
+    /\.\.\.\[(?:diff|untracked diff|check output) truncated/i.test(evaluation.diff) ||
+    evaluation.checkLines.some((line) => /\.\.\.\[check output truncated/i.test(line))
+  );
+}
+
+/** Resolve the semantic task outcome from deterministic evidence and, when requested, one independent review. */
+export async function evaluateOutcomeForJob(
+  job: JobState,
+  evaluation: JobEvaluation,
+  reviewer: SemanticReviewRunner = runSemanticReview
+): Promise<OutcomeV1> {
+  const verificationPolicy = job.launchInput.verification_policy;
+  const semanticGate = job.reliabilityProfile?.semantic_gate ?? job.launchInput.semantic_gate ?? "off";
+  const executorPassed = evaluation.signals.exitCode === 0 && !evaluation.signals.signal;
+  const preexistingFiles = new Set(job.outcomeBaselineChangedFiles);
+  const attributedChangedFiles = evaluation.changedFiles.filter((file) => !preexistingFiles.has(file));
+  const attributedScopeViolations = evaluation.signals.scopeViolations.filter((file) => !preexistingFiles.has(file));
+  const preexistingChangesAmbiguous = job.outcomeBaselineChangedFiles.length > 0;
+  const multiStageEvidenceIncomplete = Boolean(job.stages && job.stages.length > 1);
+  const workspaceEvidenceIncomplete =
+    !evaluation.signals.isGitRepo ||
+    job.additionalDirs.length > 0 ||
+    evaluation.checkLines.some((line) => /^git (?:summary skipped|diff failed|untracked files failed)/i.test(line));
+  const scopeStatus =
+    workspaceEvidenceIncomplete
+      ? "missing"
+      : attributedScopeViolations.length > 0
+        ? "failed"
+        : job.scopedPatch?.relativePaths.length
+          ? "passed"
+          : "missing";
+  const checksStatus =
+    job.checks.length === 0
+      ? "missing"
+      : evaluation.checkResults.some((check) => check.status !== "passed")
+        ? "failed"
+        : "passed";
+  const evidenceTruncated = reviewInputWasTruncated(evaluation);
+  const modifyingEvidenceComplete =
+    verificationPolicy?.task_kind === "modifying" &&
+    scopeStatus === "passed" &&
+    checksStatus === "passed" &&
+    attributedChangedFiles.length > 0;
+  const readOnlyEvidenceComplete =
+    verificationPolicy?.task_kind === "read_only" &&
+    attributedChangedFiles.length === 0 &&
+    typeof job.result.result === "string" &&
+    job.result.result.trim().length > 0;
+  const deterministicPassed =
+    executorPassed &&
+    attributedScopeViolations.length === 0 &&
+    !evidenceTruncated &&
+    !preexistingChangesAmbiguous &&
+    !multiStageEvidenceIncomplete &&
+    !workspaceEvidenceIncomplete &&
+    (modifyingEvidenceComplete || readOnlyEvidenceComplete);
+
+  let semanticReviewStatus: SemanticReviewAttemptStatusV1 = "not_requested";
+  let semanticReview: OutcomeV1["evidence"]["semantic_review"];
+  if (semanticGate !== "off" && deterministicPassed) {
+    semanticReviewStatus = "pending";
+    try {
+      const review = await reviewer({
+        task: redactSecrets(job.originalPrompt),
+        policy: verificationPolicy,
+        result: {
+          summary: job.result.result ? redactSecrets(job.result.result) : undefined,
+          changed_files: attributedChangedFiles
+        },
+        diff: evaluation.diff ? redactSecrets(evaluation.diff) : undefined,
+        checks: evaluation.checkLines.map((line) => redactSecrets(line)),
+        truncated: evidenceTruncated
+      });
+      semanticReviewStatus = semanticAttemptStatus(review);
+      if (review.status === "reviewed") {
+        semanticReview = review.evidence;
+        appendLog(job, `[semantic_review] route=${review.route} verdict=${review.evidence.verdict}`);
+      } else {
+        appendLog(job, `[semantic_review] ${review.status}: ${review.reason_code}`);
+      }
+    } catch (error: any) {
+      semanticReviewStatus = "unavailable";
+      appendLog(job, `[semantic_review] unavailable: ${error?.message || String(error)}`);
+    }
+  }
+
+  return resolveOutcome({
+    verification_policy: verificationPolicy,
+    semantic_gate: semanticGate,
+    executor_status: executorPassed ? "passed" : "failed",
+    scope_status: scopeStatus,
+    checks_status: checksStatus,
+    changed_files: attributedChangedFiles,
+    checks: evaluation.checkResults.map((check) => ({
+      command: redactSecrets(check.command),
+      exit_code: check.exit_code,
+      duration_ms: check.duration_ms
+    })),
+    semantic_review_status: semanticReviewStatus,
+    semantic_review: semanticReview,
+    artifact_refs: job.outcome.evidence.artifact_refs,
+    evidence_complete: deterministicPassed,
+    evidence_truncated: evidenceTruncated,
+    preexisting_changes_ambiguous: preexistingChangesAmbiguous,
+    multi_stage_evidence_incomplete: multiStageEvidenceIncomplete,
+    workspace_evidence_incomplete: workspaceEvidenceIncomplete
+  });
 }
 
 function finalizeResult(
   jobId: string,
   job: JobState,
   evaluation: JobEvaluation,
+  outcome: OutcomeV1,
   report: ReasoningReport | undefined,
   code: number | null,
   signal: NodeJS.Signals | null
 ): void {
-  const reliability =
-    job.reliabilityProfile ||
-    buildReliabilityProfile(job.launchInput, { worktree: Boolean(job.worktreePath || job.worktreeBranch) });
+  assertOutcomeTransition(job.outcome.status, outcome.status);
+  job.outcome = outcome;
+  const reliability = buildReliabilityProfile(job.launchInput, {
+    worktree: Boolean(job.worktreePath || job.worktreeBranch),
+    semanticReviewPassed: outcome.verification.semantic === "passed"
+  });
+  job.reliabilityProfile = reliability;
   const episode =
     job.launchInput.episode === false
       ? undefined
@@ -1027,7 +1227,8 @@ async function onClaudeClose(jobId: string, job: JobState, code: number | null, 
     job.stageResults.push(currentStageResult(job, evaluation));
   }
 
-  finalizeResult(jobId, job, evaluation, report, code, signal);
+  const outcome = await evaluateOutcomeForJob(job, evaluation);
+  finalizeResult(jobId, job, evaluation, outcome, report, code, signal);
 }
 
 function registerProcessHandlers(jobId: string, job: JobState, child: ReturnType<typeof spawn>): void {
@@ -1096,6 +1297,7 @@ async function startJob(args: Record<string, unknown>) {
   }
 
   const preexistingChangedFiles = collectChangedFiles(effectiveCwd, scopedPatch);
+  const outcomeBaselineChangedFiles = collectChangedFiles(effectiveCwd);
   const reliabilityProfile = buildReliabilityProfile(input, { worktree: Boolean(worktree) });
   const job = createJobState(
     jobId,
@@ -1116,7 +1318,8 @@ async function startJob(args: Record<string, unknown>) {
       maxRevisePasses,
       reliabilityProfile,
       stages: input.stages
-    }
+    },
+    outcomeBaselineChangedFiles
   );
   if (worktree) {
     job.worktreeRepo = worktree.repo;
@@ -1149,19 +1352,18 @@ async function startJob(args: Record<string, unknown>) {
   }
 
   if (!spawnClaude(jobId, job, launch)) {
-    const payload = { job_id: jobId, status: job.status, error: job.result.error };
-    return okJson(
-      attachReceipt(payload, {
-        tool: "start",
-        category: "implementation",
-        input: args,
-        output: payload,
-        status: "error"
-      })
-    );
+    const legacyPayload = { job_id: jobId, status: job.status, error: job.result.error };
+    const payload = attachReceipt(legacyPayload, {
+      tool: "start",
+      category: "implementation",
+      input: args,
+      output: legacyPayload,
+      status: "error"
+    });
+    return okJson({ contract_version: OUTCOME_CONTRACT_VERSION, outcome: job.outcome, ...payload });
   }
 
-  const payload = {
+  const legacyPayload = {
     job_id: jobId,
     pid: job.pid,
     status: job.status,
@@ -1170,14 +1372,13 @@ async function startJob(args: Record<string, unknown>) {
     server_version: SERVER_VERSION,
     reliability: reliabilityProfile
   };
-  return okJson(
-    attachReceipt(payload, {
-      tool: "start",
-      category: "implementation",
-      input: args,
-      output: payload
-    })
-  );
+  const payload = attachReceipt(legacyPayload, {
+    tool: "start",
+    category: "implementation",
+    input: args,
+    output: legacyPayload
+  });
+  return okJson({ contract_version: OUTCOME_CONTRACT_VERSION, outcome: job.outcome, ...payload });
 }
 
 async function waitJob(args: Record<string, unknown>) {
@@ -1215,6 +1416,15 @@ export function createCodexWorkerServer(): Server {
           properties: {
             prompt: { type: "string" },
             allowed_dirs: { type: "array", items: { type: "string" } },
+            verification_policy: {
+              type: "object",
+              properties: {
+                version: { type: "number", enum: [1] },
+                task_kind: { type: "string", enum: ["read_only", "modifying"] }
+              },
+              required: ["version", "task_kind"],
+              description: "Outcome v1 verification intent. Without it the job remains executable but cannot become accepted."
+            },
             model: { type: "string" },
             permission_mode: { type: "string", enum: ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"] },
             allowed_tools: { type: "array", items: { type: "string" } },
@@ -1264,7 +1474,7 @@ export function createCodexWorkerServer(): Server {
             semantic_gate: {
               type: "string",
               enum: ["off", "warn", "required"],
-              description: "Declare semantic review expectations for high-risk jobs without running an extra model by default."
+              description: "Run an independent semantic reviewer after deterministic verification. required fails closed as needs_evidence."
             },
             tool_budget: { type: "number", description: "Optional advisory maximum tool-call budget recorded in metrics." },
             episode: { type: "boolean", description: "When false, omit compact episode summaries from job responses." },
@@ -1541,9 +1751,10 @@ export function createCodexWorkerServer(): Server {
       category: WorkerCategory,
       reason: string,
       requiredAction: string,
-      alternatives: string[] = ["start"]
+      alternatives: string[] = ["start"],
+      outcome?: OutcomeV1
     ) {
-      const rejection = rejectedJson(tool, category, toolArgs, reason, requiredAction, alternatives);
+      const rejection = rejectedJson(tool, category, toolArgs, reason, requiredAction, alternatives, outcome);
       rememberReceipt(rejection);
       return okJson(rejection);
     }
@@ -1624,14 +1835,23 @@ export function createCodexWorkerServer(): Server {
         const result = await waitJob(toolArgs);
         if ("error" in result) {
           const error = String(result.error);
+          const stillRunning = /still running/i.test(error);
+          const runningJob = stillRunning ? jobs.get(String(toolArgs.job_id || "")) : undefined;
           return reject(
             "wait",
             "job_control",
             error,
-            /still running/i.test(error)
+            stillRunning
               ? "Call wait again with a longer timeout_ms, or use get/tail while the job is still running."
               : "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
-            /still running/i.test(error) ? ["wait", "get", "tail"] : ["start", "get", "tail"]
+            stillRunning ? ["wait", "get", "tail"] : ["start", "get", "tail"],
+            runningJob
+              ? createRunningOutcome(
+                  runningJob.launchInput.verification_policy,
+                  runningJob.reliabilityProfile?.semantic_gate ?? runningJob.launchInput.semantic_gate,
+                  ["poll_timeout"]
+                )
+              : undefined
           );
         }
         rememberReceipt(result);

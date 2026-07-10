@@ -49,7 +49,15 @@ export function appendMetrics(row: Record<string, unknown>): void {
   const file = baseFile && process.env.WORKER_METRICS_SHARD_BY_PID === "1" ? `${baseFile}.${process.pid}` : baseFile;
   if (!file) return;
   try {
-    fs.appendFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), ...row })}\n`);
+    const evalContext = Object.fromEntries(
+      [
+        ["suite_id", process.env.WORKER_EVAL_SUITE_ID],
+        ["task_id", process.env.WORKER_EVAL_TASK_ID],
+        ["run_id", process.env.WORKER_EVAL_RUN_ID],
+        ["arm", process.env.WORKER_EVAL_ARM]
+      ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0)
+    );
+    fs.appendFileSync(file, `${JSON.stringify({ ...row, ...evalContext, ts: new Date().toISOString() })}\n`);
   } catch {
     // observability must never throw
   }

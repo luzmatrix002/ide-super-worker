@@ -41,6 +41,12 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Eval contracts
+        run: npm run eval:contracts
+
+      - name: Frozen eval fixtures
+        run: npm run eval:fixtures
+
       - name: Smoke test
         run: npm run smoke
 

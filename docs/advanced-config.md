@@ -26,6 +26,33 @@ ADAPTER_PREFIX_CACHE=0
 WORKER_FALLBACK_WARN_EVERY=5
 ```
 
+## Outcome V1 Semantic Review
+
+`semantic_gate=required` performs one independent, cache-free review after executor, scope, and checks pass. Missing configuration, timeout, invalid JSON, risky verdicts, or truncated evidence produce `outcome.status="needs_evidence"`; they never silently count as accepted.
+
+```env
+WORKER_SEMANTIC_REVIEW_MODEL=deepseek-v4-pro
+WORKER_SEMANTIC_REVIEW_TIMEOUT_MS=60000
+```
+
+The reviewer receives only the declared task/policy, complete result or diff, and check evidence. It does not receive the executor transcript and cannot trigger auto-revise. Outcome v1 sends at most one upstream reviewer request: it uses the primary gateway when configured, or the fallback only when no primary gateway is configured; it never retries a failed primary review through another model route.
+
+## Paired Evaluation
+
+EvalSpan JSONL is intentionally separate from worker metrics. Set the context variables on an isolated worker process so upstream and tool rows can be joined to an externally produced direct/worker usage export.
+
+```env
+WORKER_EVAL_SPAN_FILE=D:/your/workspaces/.eval/eval-spans.jsonl
+WORKER_EVAL_SUITE_ID=pilot-v1
+WORKER_EVAL_TASK_ID=search-read-01
+WORKER_EVAL_RUN_ID=run-001
+WORKER_EVAL_ARM=worker
+```
+
+Import and gate producer JSONL with `npm run eval:gate -- --import producer.jsonl --out .eval/eval-spans.jsonl`, then run `npm run eval:gate -- --input .eval/eval-spans.jsonl --mode pilot`. Missing measured usage, cost, pair identity, evidence, or frozen-corpus linkage fails closed. `JobResult.total_cost_usd` is not a valid EvalSpan source.
+
+After a real pilot passes, run `npm run eval:formal -- --input <spans.jsonl> --manifest <manifest.json>`. The formal harness fixes the bootstrap seed/sample count, McNemar diagnostic, non-inferiority margin, savings thresholds, sample expansion steps, and exit codes described in `eval/README.md`.
+
 ## Reliability Gates
 
 These values control audit thresholds for worker tool-call health. Keep blocking policy at `observe` or `warn` until your own metrics show the gates are stable.

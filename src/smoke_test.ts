@@ -41,6 +41,14 @@ async function main(): Promise<void> {
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
     throw new Error(`Unexpected tools: ${names.join(", ")}`);
   }
+  const startSchema = tools.tools.find((tool) => tool.name === "start")?.inputSchema as any;
+  if (
+    startSchema?.properties?.verification_policy?.properties?.task_kind?.enum?.join(",") !==
+      "read_only,modifying" ||
+    !String(startSchema?.properties?.semantic_gate?.description || "").includes("independent semantic reviewer")
+  ) {
+    throw new Error("Expected start schema to expose verification_policy and the real semantic reviewer contract");
+  }
 
   const missing = await client.callTool({ name: "get", arguments: { job_id: "missing-job" } });
   if (missing.isError) {
@@ -48,8 +56,14 @@ async function main(): Promise<void> {
   }
   const missingContent = Array.isArray(missing.content) ? (missing.content as Array<{ text?: unknown }>) : [];
   const missingPayload = JSON.parse(String(missingContent[0]?.text || "{}"));
-  if (missingPayload.status !== "rejected" || !missingPayload.fallback?.action || missingPayload.receipt?.status !== "ok") {
-    throw new Error("Expected get(missing-job) to include status:rejected, fallback, and ok receipt");
+  if (
+    missingPayload.contract_version !== "outcome.v1" ||
+    missingPayload.outcome?.status !== "rejected" ||
+    missingPayload.status !== "rejected" ||
+    !missingPayload.fallback?.action ||
+    missingPayload.receipt?.status !== "ok"
+  ) {
+    throw new Error("Expected get(missing-job) to include Outcome v1 plus the frozen legacy rejection payload");
   }
 
   const badSearch = await client.callTool({ name: "search", arguments: { pattern: "never-matches", dirs: [path.join(cwd, "__missing__")] } });
@@ -58,8 +72,14 @@ async function main(): Promise<void> {
   }
   const badSearchContent = Array.isArray(badSearch.content) ? (badSearch.content as Array<{ text?: unknown }>) : [];
   const badSearchPayload = JSON.parse(String(badSearchContent[0]?.text || "{}"));
-  if (badSearchPayload.status !== "rejected" || !badSearchPayload.fallback?.action || badSearchPayload.receipt?.status !== "ok") {
-    throw new Error("Expected search(bad-dir) to include status:rejected, fallback, and ok receipt");
+  if (
+    badSearchPayload.contract_version !== "outcome.v1" ||
+    badSearchPayload.outcome?.status !== "rejected" ||
+    badSearchPayload.status !== "rejected" ||
+    !badSearchPayload.fallback?.action ||
+    badSearchPayload.receipt?.status !== "ok"
+  ) {
+    throw new Error("Expected search(bad-dir) to include Outcome v1 plus the frozen legacy rejection payload");
   }
 
   await client.close();

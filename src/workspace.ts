@@ -43,7 +43,7 @@ function pathspec(scope?: ResolvedScopedPatch): string[] {
 }
 
 export function collectChangedFiles(cwd: string, scope?: ResolvedScopedPatch): string[] {
-  const tracked = runGit(cwd, ["diff", "--name-only", ...pathspec(scope)]);
+  const tracked = runGit(cwd, ["diff", "--name-only", "HEAD", ...pathspec(scope)]);
   const untracked = runGit(cwd, ["ls-files", "--others", "--exclude-standard", ...pathspec(scope)]);
   return [...new Set([...splitLines(tracked.stdout), ...splitLines(untracked.stdout)])].sort();
 }
@@ -111,13 +111,16 @@ export function collectWorkspaceSummary(
     };
   }
 
-  const trackedDiff = runGit(cwd, ["diff", "--no-ext-diff", "--", ...(scope?.relativePaths || [])]);
+  const trackedDiff = runGit(cwd, ["diff", "--no-ext-diff", "HEAD", "--", ...(scope?.relativePaths || [])]);
   if (!trackedDiff.ok) {
     checks.push(`git diff failed: ${trackedDiff.stderr.trim()}`);
   }
 
   const changedFiles = collectChangedFiles(cwd, scope);
   const untracked = runGit(cwd, ["ls-files", "--others", "--exclude-standard", ...pathspec(scope)]);
+  if (!untracked.ok) {
+    checks.push(`git untracked files failed: ${untracked.stderr.trim()}`);
+  }
   const untrackedFiles = splitLines(untracked.stdout);
 
   const trackedText = trackedDiff.stdout || "";

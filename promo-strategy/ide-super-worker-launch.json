@@ -1,0 +1,27 @@
+{
+  "projectName": "IDE Super Worker",
+  "repository": "https://github.com/luzmatrix002/ide-super-worker",
+  "releaseUrl": "https://github.com/luzmatrix002/ide-super-worker/releases/tag/v2.5.0",
+  "posts": {
+    "x": {
+      "body": "IDE Super Worker is live: a cheaper async worker lane for IDE AI agents. Premium models stay focused on planning/review; workers handle repo search, analysis, repair loops and test output. Sample: 202,899 -> 41,048 bytes, about 80% less main-thread intake.",
+      "link": "https://github.com/luzmatrix002/ide-super-worker",
+      "tags": ["AI", "MCP"]
+    },
+    "juejin": {
+      "title": "IDE AI Agent 如何把上下文成本降 80%",
+      "summary": "把大仓库任务交给廉价 Worker",
+      "body": "IDE Super Worker 是一个给 IDE AI Agent 用的低成本后台 Worker 通道。\n\n这次发布暴露了一个很实际的问题：高级模型适合做规划、决策和最终审查，但仓库搜索、批量读取、测试输出、修复循环和证据摘要，不一定都要塞进主线程。\n\nIDE Super Worker 的做法是把这些重活路由给更便宜的 OpenAI-compatible gateway 或本地模型，让主线程只拿到小而可审计的结果。\n\n一次 10 条命令样本里，主线程输入从 202,899 bytes 降到 41,048 bytes，约减少 80%。\n\n项目地址：https://github.com/luzmatrix002/ide-super-worker\n\n适合场景：大仓库搜索、长测试输出、批量 review、低成本修复循环、需要保留审计证据的 AI 编程工作流。"
+    },
+    "zhihu": {
+      "title": "IDE 里的 AI Agent 怎么降成本？",
+      "summary": "把机械读仓库和测试输出从高级模型主线程拆出去。",
+      "body": "我这次把项目整理成 IDE Super Worker，核心思路很简单：不要让最贵的 IDE Agent 主线程承担所有工作。\n\n高级模型应该负责计划、取舍、最终审查；仓库搜索、批量读取、测试日志摘要、修复循环这类工作，可以交给一个后台 Worker lane 去做。\n\n这个 Worker lane 可以接更便宜的 OpenAI-compatible gateway 或本地模型，并把结果压缩成可审计证据返回给主线程。\n\n在一个实际样本里，主线程输入从 202,899 bytes 降到 41,048 bytes，约减少 80%。\n\n开源地址：https://github.com/luzmatrix002/ide-super-worker\n\n我更看重它的工程边界：不是替代高级模型，而是让高级模型少干机械活，把上下文预算留给真正需要判断力的地方。"
+    },
+    "xiaohongshu": {
+      "title": "AI 编程省钱：别让贵模型干重活",
+      "summary": "IDE Super Worker 开源了",
+      "body": "最近把一个小工具整理成开源项目：IDE Super Worker。\n\n它解决的问题很直接：IDE 里的高级 AI Agent 很贵，但仓库搜索、测试日志、批量读取、修复循环这些机械活，不一定都要让最贵模型处理。\n\n我的做法是加一个后台 Worker 通道：\n1. 高级模型负责规划和最终审查\n2. Worker 负责搜索、分析、测试摘要和修复循环\n3. 主线程只接收压缩后的证据\n\n实测样本：202,899 bytes -> 41,048 bytes，主线程输入大约少 80%。\n\n项目：IDE Super Worker\nGitHub：https://github.com/luzmatrix002/ide-super-worker\n\n适合大仓库、AI 编程、MCP、低成本自动化工作流。"
+    }
+  }
+}

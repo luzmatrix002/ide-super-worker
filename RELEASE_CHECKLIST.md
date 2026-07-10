@@ -13,6 +13,9 @@
 - [ ] `node_modules/`, `dist/`, logs, and archives are not tracked.
 - [ ] `npm run build` passes.
 - [ ] `npm run test` passes.
+- [ ] `npm run eval:contracts` and `npm run eval:fixtures` pass.
+- [ ] A real 10-pair pilot has complete external premium usage/cost JSONL, or release notes explicitly state that no savings/non-inferiority claim is authorized.
+- [ ] Any “cost-saving without quality loss” claim is backed by a passing `npm run eval:formal` result, not worker-call ratios alone.
 - [ ] `npm run smoke` passes.
 - [ ] `npm pack --dry-run` contains only intended files.
 - [ ] CI workflow is added with a token that has GitHub `workflow` scope.

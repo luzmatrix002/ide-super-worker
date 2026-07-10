@@ -1,0 +1,38 @@
+{
+  "id": "compat-job",
+  "server_version": "2.5.0",
+  "job_status": "completed",
+  "changed_files": [],
+  "preexisting_changed_files": [],
+  "checks": [],
+  "diff": "",
+  "revise_passes": 0,
+  "reliability": {
+    "tier": "standard",
+    "blocking_policy": "observe",
+    "semantic_gate": "off",
+    "required_gates": [],
+    "satisfied_gates": [],
+    "missing_gates": [],
+    "warnings": [],
+    "blocking_risk": "none"
+  },
+  "summary": "done",
+  "receipt": {
+    "route": "worker",
+    "tool": "get",
+    "category": "job_control",
+    "input_bytes": 60,
+    "output_bytes": 273,
+    "summary_bytes": 357,
+    "artifact_refs": ["artifact://<normalized>"],
+    "truncated": true,
+    "cached": false,
+    "status": "ok",
+    "abnormal": {
+      "verdict": "accept",
+      "confidence": 0.97,
+      "issues": []
+    }
+  }
+}

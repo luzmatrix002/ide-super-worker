@@ -70,7 +70,7 @@ export function normalizeReliabilityArgs(args: Record<string, unknown>): Partial
 
 export function buildReliabilityProfile(
   input: Partial<StartJobInput>,
-  runtime: { worktree?: boolean } = {}
+  runtime: { worktree?: boolean; semanticReviewPassed?: boolean } = {}
 ): ReliabilityProfile {
   const tier =
     input.reliability_tier ||
@@ -93,6 +93,10 @@ export function buildReliabilityProfile(
   const satisfied = new Set<string>();
   const warnings: string[] = [];
 
+  if (semanticGate === "required" && !process.env.WORKER_SEMANTIC_REVIEW_MODEL?.trim()) {
+    warnings.push("semantic_gate=required needs WORKER_SEMANTIC_REVIEW_MODEL; acceptance will need evidence");
+  }
+
   if (tier === "lite") {
     required.add("read_only_route");
     warnings.push("lite reliability tier is safest with read-only tools; start jobs are observed but not blocked");
@@ -103,6 +107,10 @@ export function buildReliabilityProfile(
     required.add("scoped_patch");
     if (!hasChecks) warnings.push(`${tier} tier should include concrete checks`);
     if (!scoped) warnings.push(`${tier} tier should include scoped_patch paths`);
+  }
+
+  if (semanticGate === "required") {
+    required.add("semantic_gate");
   }
 
   if (tier === "critical") {
@@ -116,7 +124,7 @@ export function buildReliabilityProfile(
 
   if (hasChecks) satisfied.add("checks");
   if (scoped) satisfied.add("scoped_patch");
-  if (semanticGate !== "off") satisfied.add("semantic_gate");
+  if (runtime.semanticReviewPassed === true) satisfied.add("semantic_gate");
   if (process.env.WORKER_ESCALATE_MODEL?.trim()) satisfied.add("escalate_model");
   if (runtime.worktree) satisfied.add("worktree_isolation");
 
@@ -142,8 +150,11 @@ export function buildReliabilityProfile(
 }
 
 export function reliabilityRejectionReason(profile: ReliabilityProfile): string | undefined {
-  if (profile.blocking_policy !== "enforce" || profile.missing_gates.length === 0) return undefined;
-  return `reliability_policy blocked ${profile.tier} job; missing gates: ${profile.missing_gates.join(", ")}`;
+  const blockingMissing = profile.missing_gates.filter(
+    (gate) => gate !== "semantic_gate" || profile.semantic_gate === "off"
+  );
+  if (profile.blocking_policy !== "enforce" || blockingMissing.length === 0) return undefined;
+  return `reliability_policy blocked ${profile.tier} job; missing gates: ${blockingMissing.join(", ")}`;
 }
 
 export function buildEpisodeSummary(input: {

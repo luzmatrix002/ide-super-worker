@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "suite_id": "pilot-v1",
+  "description": "Synthetic measurement-pipeline pilot only; not evidence of cost savings or quality non-inferiority.",
+  "material_file": "eval/fixtures/pilot-material-v1.json",
+  "material_sha256": "37c4ffefd9133878b7f53c2b55383ecb17f33f129906f880aec1644f056b8381",
+  "runner_protocol": "For each arm, create a fresh session/worktree, materialize only the named material section, use the exact prompt, and collect the declared artifacts and fact IDs.",
+  "corpus_sha256": "304e3579327015a4c14e90054a91400b68640c30d7c7e236aa183b814b58ad9f",
+  "tasks": [
+    {
+      "task_id": "search-read-01",
+      "category": "search_read",
+      "source": "synthetic_edge",
+      "prompt": "Using pilot-material-v1.json#search_read_01, locate the declaration of resolveLane and list every direct caller. Return file-and-line evidence and the matching expected fact IDs.",
+      "prompt_sha256": "7842f86f51078596b3d183ea069d8f6550a82ab684e347afb4c4c06450ed0245",
+      "fixture_ref": "pilot-material-v1.json#search_read_01",
+      "expected_fact_ids": ["SR01_DECL", "SR01_CALL_SERVER", "SR01_CALL_CLI"],
+      "rubric": [
+        "Identifies the authoritative declaration",
+        "Lists every direct caller in the frozen fixture",
+        "Every claim has a traceable file-and-line reference"
+      ],
+      "required_artifacts": ["answer", "location_evidence"],
+      "task_spec_sha256": "d8fa78499068768efdc6780f1d0cc7c8dbfc5f3155caa0a2b3793791177fa84f"
+    },
+    {
+      "task_id": "search-read-02",
+      "category": "search_read",
+      "source": "synthetic_edge",
+      "prompt": "Materialize pilot-material-v1.json#search_read_02 exactly, search for the Chinese phrase 统一验收状态, and report its generated line plus the final surrounding lines and matching fact IDs.",
+      "prompt_sha256": "192d90f681c3aec767939045546c30232ecebb8c6531c6d828dbecee4d8545da",
+      "fixture_ref": "pilot-material-v1.json#search_read_02",
+      "expected_fact_ids": ["SR02_MATCH", "SR02_TAIL"],
+      "rubric": [
+        "Finds the final-file occurrence",
+        "Preserves the Chinese search term",
+        "Returns enough surrounding evidence to verify the match"
+      ],
+      "required_artifacts": ["answer", "search_evidence"],
+      "task_spec_sha256": "cff7c998b8e5b6bcffc37e9a9f0de20c2d29f3dbc839739a2fbcdd9e31bd4ce2"
+    },
+    {
+      "task_id": "analyze-diagnosis-01",
+      "category": "analyze_diagnosis",
+      "source": "synthetic_edge",
+      "prompt": "Using pilot-material-v1.json#analyze_diagnosis_01, identify the first causal test failure, distinguish downstream symptoms, and cite exact log lines with matching fact IDs.",
+      "prompt_sha256": "32ba0df11c2741391a5d7dda7a287a192e0fdaa37b8d25c14225eb297b31aa08",
+      "fixture_ref": "pilot-material-v1.json#analyze_diagnosis_01",
+      "expected_fact_ids": ["AD01_CAUSE", "AD01_SYMPTOM"],
+      "rubric": [
+        "Separates observed facts from inference",
+        "Names the first causal failure rather than a downstream symptom",
+        "Cites the relevant log evidence"
+      ],
+      "required_artifacts": ["diagnosis", "log_evidence"],
+      "task_spec_sha256": "c73ff0d0f3f7344994aef0fa5145854cf125c8fb26155167913cc9f4655cbae8"
+    },
+    {
+      "task_id": "analyze-diagnosis-02",
+      "category": "analyze_diagnosis",
+      "source": "synthetic_edge",
+      "prompt": "Using pilot-material-v1.json#analyze_diagnosis_02, trace the complete source-to-presenter call path and identify the exact expression that truncates evidence. Return matching fact IDs.",
+      "prompt_sha256": "8079df11c85090c811f0c63a15181f1034457cfe280873af0c91e50c24084fb8",
+      "fixture_ref": "pilot-material-v1.json#analyze_diagnosis_02",
+      "expected_fact_ids": ["AD02_FLOW", "AD02_TRUNCATION"],
+      "rubric": [
+        "Traces the data flow across all frozen modules",
+        "Identifies the truncation boundary",
+        "Does not infer behavior beyond available evidence"
+      ],
+      "required_artifacts": ["analysis", "call_path_evidence"],
+      "task_spec_sha256": "10f44d936550a7e62ddb57e9f95ff7878cea4ed2b4a0505efac199328752d8f3"
+    },
+    {
+      "task_id": "review-01",
+      "category": "review",
+      "source": "synthetic_edge",
+      "prompt": "Review pilot-material-v1.json#review_01 against its spec. Report only actionable defects with tight locations, severity, and matching fact IDs.",
+      "prompt_sha256": "475296b69e7efd1ea67ba5b7ed21d997ab2a912f8ef3909f52a2fe1b17df4a7d",
+      "fixture_ref": "pilot-material-v1.json#review_01",
+      "expected_fact_ids": ["RV01_ZERO"],
+      "rubric": [
+        "Finds every seeded major defect",
+        "Produces no unsupported critical finding",
+        "Provides tight file-and-line locations"
+      ],
+      "required_artifacts": ["review", "diff_evidence"],
+      "task_spec_sha256": "027c8e927e0b2a6926ca93ddf60c60fa8663890092d8eba04aa0e6c2f9af155f"
+    },
+    {
+      "task_id": "review-02",
+      "category": "review",
+      "source": "synthetic_edge",
+      "prompt": "Review pilot-material-v1.json#review_02. Detect the declared-scope violation and semantic routing regression, rank them by severity, and return matching fact IDs.",
+      "prompt_sha256": "9af8177f4079e0a557a97f4221249f4d5f6745e17e872f603daea2cd8b40acde",
+      "fixture_ref": "pilot-material-v1.json#review_02",
+      "expected_fact_ids": ["RV02_SCOPE", "RV02_SEMANTIC"],
+      "rubric": [
+        "Detects the scope violation",
+        "Detects the semantic regression",
+        "Ranks defects by severity"
+      ],
+      "required_artifacts": ["review", "scope_evidence", "diff_evidence"],
+      "task_spec_sha256": "0f44bb8191f763f2bfab66131d55ee4e7f8d623f67f19d5cf630da2c17ec9f09"
+    },
+    {
+      "task_id": "bugfix-01",
+      "category": "bugfix",
+      "source": "synthetic_edge",
+      "prompt": "Materialize pilot-material-v1.json#bugfix_01, fix parseItems with the smallest scoped change, run the supplied parser assertion, and return patch/check evidence plus matching fact IDs.",
+      "prompt_sha256": "d47a79cc300a7c3e21701ceb72eaad0f6df793b6a61120d42916b3d6b5654999",
+      "fixture_ref": "pilot-material-v1.json#bugfix_01",
+      "expected_fact_ids": ["BF01_BUG", "BF01_ORACLE"],
+      "rubric": [
+        "Regression test fails before and passes after the fix",
+        "Patch stays inside declared scope",
+        "No unrelated behavior changes"
+      ],
+      "required_artifacts": ["patch", "check_result", "diff_summary"],
+      "task_spec_sha256": "7e3a878f04c42103e83efb80e66540ee49845eb05f418fc831c626703bb56af9"
+    },
+    {
+      "task_id": "bugfix-02",
+      "category": "bugfix",
+      "source": "synthetic_edge",
+      "prompt": "Materialize pilot-material-v1.json#bugfix_02, fix the Windows shell mismatch without a cross-shell pipeline, and provide focused command evidence plus matching fact IDs.",
+      "prompt_sha256": "f50b1160839e04c0d02cf2dcffa883bf1a1da49fafb954a5bc70ee71a5a04320",
+      "fixture_ref": "pilot-material-v1.json#bugfix_02",
+      "expected_fact_ids": ["BF02_SHELL", "BF02_FIX"],
+      "rubric": [
+        "Reproduces the Windows-specific failure",
+        "Uses one shell end-to-end",
+        "Focused regression check passes"
+      ],
+      "required_artifacts": ["patch", "check_result", "command_evidence"],
+      "task_spec_sha256": "c50bb4d41f8f36df84eb77fa2434de8b0cfde5edf9471339f0f2956407068c6b"
+    },
+    {
+      "task_id": "small-feature-refactor-01",
+      "category": "small_feature_refactor",
+      "source": "synthetic_edge",
+      "prompt": "Using pilot-material-v1.json#small_feature_refactor_01, produce the additive Outcome envelope and prove that removing contract_version and outcome deep-equals legacy.json. Return matching fact IDs.",
+      "prompt_sha256": "a9ad47f49c7324b18c0562a671b465c689c9f51fcf663d2d4cafbfd92ee35519",
+      "fixture_ref": "pilot-material-v1.json#small_feature_refactor_01",
+      "expected_fact_ids": ["SF01_ADDITIVE", "SF01_COMPAT"],
+      "rubric": [
+        "New field matches the declared contract",
+        "Legacy payload remains deeply equal after removing the additive field",
+        "Build and focused contract test pass"
+      ],
+      "required_artifacts": ["patch", "contract_result", "compatibility_result"],
+      "task_spec_sha256": "45e5956e349f7224e824b76ca567f4e744924c347f640dc87e4323a1dbe5ae96"
+    },
+    {
+      "task_id": "test-log-01",
+      "category": "test_log",
+      "source": "synthetic_edge",
+      "prompt": "Digest pilot-material-v1.json#test_log_01 while preserving the first causal failure, exact final counts, and a recoverable full-log reference. Return matching fact IDs.",
+      "prompt_sha256": "db0bc7cc532081d15e523c57b180cc789017bdf23ac001e44fed8a35317b7d04",
+      "fixture_ref": "pilot-material-v1.json#test_log_01",
+      "expected_fact_ids": ["TL01_FIRST", "TL01_SUMMARY", "TL01_FULL"],
+      "rubric": [
+        "Preserves the first causal failure",
+        "Reports the final pass/fail counts",
+        "Provides a recoverable full-output artifact reference"
+      ],
+      "required_artifacts": ["digest", "full_log_ref"],
+      "task_spec_sha256": "3dab0e7d67e1989df2030e547937437f03d8edc69a4fcc9d9b86563f62e95fe9"
+    }
+  ]
+}

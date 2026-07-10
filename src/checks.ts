@@ -7,7 +7,10 @@ import type { CheckCommand } from "./types.js";
 
 export interface CheckResult {
   label: string;
+  command: string;
   status: CheckStatus;
+  exit_code: number;
+  duration_ms: number;
 }
 
 function truncate(text: string): string {
@@ -55,6 +58,7 @@ export async function runCheckCommands(
   for (const check of checks) {
     const timeoutMs = Math.min(Math.max(check.timeout_ms || CHECK_TIMEOUT_MS, 1_000), CHECK_TIMEOUT_MS);
     const label = check.name || check.command;
+    const startedAt = Date.now();
     const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string; timedOut: boolean }>((resolve) => {
       const child = spawn(check.command, {
         cwd,
@@ -92,7 +96,13 @@ export async function runCheckCommands(
     }
 
     const structuredStatus: CheckStatus = result.timedOut ? "timeout" : result.code === 0 ? "passed" : "failed";
-    results.push({ label, status: structuredStatus });
+    results.push({
+      label,
+      command: check.command,
+      status: structuredStatus,
+      exit_code: result.timedOut ? 124 : (result.code ?? 1),
+      duration_ms: Date.now() - startedAt
+    });
 
     const status = result.timedOut ? "timeout" : result.code === 0 ? "passed" : `failed(${result.code ?? result.signal ?? "unknown"})`;
     const detail = truncate(result.output).trim();

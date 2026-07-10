@@ -1,4 +1,5 @@
 import { JOB_TTL_MS, LOG_BUFFER_MAX, LOG_LINE_MAX, MAX_STORED_JOBS, RAW_STREAM_MAX, SERVER_VERSION } from "./config.js";
+import { createCancelledOutcome, createRunningOutcome, resolveOutcome } from "./outcome.js";
 import { redactSecrets } from "./redact.js";
 import { removeWorktree } from "./workspace.js";
 import type { CheckCommand, JobState, JobStatus, ReliabilityProfile, ResolvedScopedPatch, StartJobInput } from "./types.js";
@@ -26,11 +27,18 @@ export function createJobState(
   scopedPatch?: ResolvedScopedPatch,
   checks: CheckCommand[] = [],
   preexistingChangedFiles: string[] = [],
-  reasoning?: JobReasoningConfig
+  reasoning?: JobReasoningConfig,
+  outcomeBaselineChangedFiles: string[] = preexistingChangedFiles
 ): JobState {
+  const launchInput =
+    reasoning?.launchInput ?? ({ prompt: reasoning?.originalPrompt ?? "", allowed_dirs: allowedDirs } as StartJobInput);
   return {
     id,
     status: "running",
+    outcome: createRunningOutcome(
+      launchInput.verification_policy,
+      reasoning?.reliabilityProfile?.semantic_gate ?? launchInput.semantic_gate
+    ),
     command,
     args,
     cwd,
@@ -39,14 +47,14 @@ export function createJobState(
     scopedPatch,
     checks,
     preexistingChangedFiles,
+    outcomeBaselineChangedFiles,
     started_at: new Date().toISOString(),
     logBuffer: [],
     stdoutRemainder: "",
     stderrRemainder: "",
     originalPrompt: reasoning?.originalPrompt ?? "",
     additionalDirs: reasoning?.additionalDirs ?? [],
-    launchInput:
-      reasoning?.launchInput ?? ({ prompt: reasoning?.originalPrompt ?? "", allowed_dirs: allowedDirs } as StartJobInput),
+    launchInput,
     reasoningEnabled: reasoning?.reasoningEnabled ?? false,
     autoReviseEnabled: reasoning?.autoReviseEnabled ?? false,
     maxRevisePasses: reasoning?.maxRevisePasses ?? 0,
@@ -189,6 +197,24 @@ export function setTerminalStatus(
   job.ended_at = new Date().toISOString();
   job.exit_code = details.exitCode;
   job.signal = details.signal;
+
+  if (status === "cancelled") {
+    job.outcome = createCancelledOutcome(job.outcome);
+  } else if (status === "failed" && job.outcome.status === "running") {
+    job.outcome = resolveOutcome({
+      verification_policy: job.launchInput.verification_policy,
+      semantic_gate: job.reliabilityProfile?.semantic_gate ?? job.launchInput.semantic_gate,
+      executor_status: "failed",
+      evidence_complete: false
+    });
+  } else if (status === "completed" && job.outcome.status === "running") {
+    job.outcome = resolveOutcome({
+      verification_policy: job.launchInput.verification_policy,
+      semantic_gate: job.reliabilityProfile?.semantic_gate ?? job.launchInput.semantic_gate,
+      executor_status: "passed",
+      evidence_complete: false
+    });
+  }
 
   if (details.error) {
     job.result.error = redactSecrets(details.error);

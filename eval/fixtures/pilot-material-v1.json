@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic, deterministic inputs for pilot-v1. The runner materializes each section in a fresh worktree before either arm runs.",
+  "sections": {
+    "search_read_01": {
+      "files": {
+        "src/router.ts": "export function resolveLane(risk: string) { return risk === 'high' ? 'direct' : 'worker'; }\n",
+        "src/server.ts": "import { resolveLane } from './router.js';\nexport const requestLane = (risk: string) => resolveLane(risk);\n",
+        "src/cli.ts": "import { resolveLane } from './router.js';\nconsole.log(resolveLane(process.argv[2] || 'low'));\n"
+      },
+      "facts": {
+        "SR01_DECL": "resolveLane is declared in src/router.ts",
+        "SR01_CALL_SERVER": "src/server.ts directly calls resolveLane",
+        "SR01_CALL_CLI": "src/cli.ts directly calls resolveLane"
+      }
+    },
+    "search_read_02": {
+      "generator": {
+        "file": "src/long-evidence.txt",
+        "prefix_lines": 1200,
+        "prefix_template": "filler-{line}",
+        "tail_lines": ["边界证据：统一验收状态必须可回溯。", "EOF"]
+      },
+      "facts": {
+        "SR02_MATCH": "The only Chinese match is on generated line 1201",
+        "SR02_TAIL": "The match occurs in the final two lines of the generated file"
+      }
+    },
+    "analyze_diagnosis_01": {
+      "files": {
+        "logs/test.log": "[setup] database ready\n[test] parser suite started\nAssertionError: expected 3 records, received 2\n    at parser.test.ts:41:7\n[cleanup] failed because suite aborted\n"
+      },
+      "facts": {
+        "AD01_CAUSE": "The parser assertion is the first causal failure",
+        "AD01_SYMPTOM": "The cleanup failure is downstream"
+      }
+    },
+    "analyze_diagnosis_02": {
+      "files": {
+        "src/source.ts": "export const load = () => 'complete-evidence';\n",
+        "src/adapter.ts": "import { load } from './source.js';\nexport const adapt = () => load().slice(0, 8);\n",
+        "src/presenter.ts": "import { adapt } from './adapter.js';\nexport const present = () => adapt();\n"
+      },
+      "facts": {
+        "AD02_FLOW": "source.load -> adapter.adapt -> presenter.present",
+        "AD02_TRUNCATION": "adapter.adapt truncates evidence with slice(0, 8)"
+      }
+    },
+    "review_01": {
+      "files": {
+        "spec.md": "parsePort must accept integers from 1 through 65535 and reject all other inputs.\n",
+        "change.diff": "diff --git a/src/port.ts b/src/port.ts\n+export const parsePort = (value: string) => {\n+  const port = Number(value);\n+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : undefined;\n+};\n"
+      },
+      "facts": {
+        "RV01_ZERO": "The patch incorrectly accepts port 0"
+      }
+    },
+    "review_02": {
+      "files": {
+        "task.json": "{\"scope\":[\"src/router.ts\"],\"requirement\":\"high risk routes direct\"}\n",
+        "change.diff": "diff --git a/src/router.ts b/src/router.ts\n-return risk === 'high' ? 'direct' : 'worker';\n+return 'worker';\ndiff --git a/docs/config.md b/docs/config.md\n+Undeclared documentation edit.\n"
+      },
+      "facts": {
+        "RV02_SCOPE": "docs/config.md is outside declared scope",
+        "RV02_SEMANTIC": "The patch routes high risk work to worker instead of direct"
+      }
+    },
+    "bugfix_01": {
+      "files": {
+        "src/parser.ts": "export const parseItems = (text: string) => text.split(',').filter(Boolean);\n",
+        "tests/parser.test.ts": "import assert from 'node:assert/strict';\nimport { parseItems } from '../src/parser.js';\nassert.deepEqual(parseItems('a, b'), ['a', 'b']);\n"
+      },
+      "facts": {
+        "BF01_BUG": "parseItems fails to trim whitespace",
+        "BF01_ORACLE": "The supplied assertion is the focused regression oracle"
+      }
+    },
+    "bugfix_02": {
+      "files": {
+        "src/runner.ts": "export const command = \"Get-ChildItem | Select-String needle\";\nexport const shell = 'cmd.exe';\n",
+        "tests/runner.test.ts": "The command must execute through PowerShell end-to-end on Windows and must not be piped through cmd.exe.\n"
+      },
+      "facts": {
+        "BF02_SHELL": "A PowerShell pipeline is incorrectly assigned to cmd.exe",
+        "BF02_FIX": "The shell and command must remain PowerShell-shaped end-to-end"
+      }
+    },
+    "small_feature_refactor_01": {
+      "files": {
+        "legacy.json": "{\"status\":\"completed\",\"value\":7}\n",
+        "contract.md": "Add contract_version and outcome at the top level. Removing those two fields must reproduce legacy.json exactly.\n"
+      },
+      "facts": {
+        "SF01_ADDITIVE": "Only contract_version and outcome may be added",
+        "SF01_COMPAT": "Removing the two additions must deep-equal legacy.json"
+      }
+    },
+    "test_log_01": {
+      "files": {
+        "logs/full.log": "suite start\nPASS alpha\nFAIL parser: expected 3 received 2\nstack: parser.test.ts:41\nPASS cleanup-a\nFAIL cleanup-b: downstream abort\nsummary: 2 passed, 2 failed\n"
+      },
+      "facts": {
+        "TL01_FIRST": "parser is the first causal failure",
+        "TL01_SUMMARY": "The final summary is 2 passed and 2 failed",
+        "TL01_FULL": "The answer must retain a reference to logs/full.log"
+      }
+    }
+  }
+}

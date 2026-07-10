@@ -1,0 +1,223 @@
+{
+  "verbose_job": {
+    "id": "verbose-job",
+    "server_version": "2.5.0",
+    "job_status": "completed",
+    "changed_files": ["src/example.ts"],
+    "preexisting_changed_files": [],
+    "checks": ["unit: passed"],
+    "diff": "diff --git a/src/example.ts b/src/example.ts\n-old\n+new",
+    "revise_passes": 1,
+    "reliability": {
+      "tier": "standard",
+      "blocking_policy": "observe",
+      "semantic_gate": "off",
+      "required_gates": [],
+      "satisfied_gates": [],
+      "missing_gates": [],
+      "warnings": [],
+      "blocking_risk": "none"
+    },
+    "episode": {
+      "job_id": "verbose-job",
+      "tier": "standard",
+      "blocking_policy": "observe",
+      "semantic_gate": "off",
+      "model": "compat-model",
+      "started_at": "2026-01-01T00:00:00.000Z",
+      "ended_at": "2026-01-01T00:00:01.000Z",
+      "changed_files_count": 1,
+      "check_count": 1,
+      "failed_check_count": 0,
+      "revise_passes": 1,
+      "stage_count": 0,
+      "trajectory_score": 95,
+      "warnings": [],
+      "missing_gates": []
+    },
+    "summary": "implemented",
+    "session_id": "session-legacy",
+    "duration_ms": 1000,
+    "total_cost_usd": 0.01,
+    "receipt": {
+      "route": "worker",
+      "tool": "get",
+      "category": "job_control",
+      "input_bytes": 59,
+      "output_bytes": 707,
+      "summary_bytes": 878,
+      "artifact_refs": ["artifact://<normalized>"],
+      "truncated": false,
+      "cached": false,
+      "status": "ok",
+      "abnormal": {
+        "verdict": "accept",
+        "confidence": 0.97,
+        "issues": []
+      }
+    },
+    "pid": 4242,
+    "status": "completed",
+    "cwd": "/workspace",
+    "model": "compat-model",
+    "allowed_dirs": ["/workspace"],
+    "scoped_patch": [],
+    "started_at": "2026-01-01T00:00:00.000Z",
+    "ended_at": "2026-01-01T00:00:01.000Z",
+    "exit_code": 0,
+    "signal": null,
+    "result": {
+      "server_version": "2.5.0",
+      "job_status": "completed",
+      "changed_files": ["src/example.ts"],
+      "checks": ["unit: passed"],
+      "diff": "diff --git a/src/example.ts b/src/example.ts\n-old\n+new",
+      "result": "implemented",
+      "revise_passes": 1,
+      "session_id": "session-legacy",
+      "duration_ms": 1000,
+      "total_cost_usd": 0.01
+    }
+  },
+  "tool_failure": {
+    "status": "error",
+    "tool": "get",
+    "category": "job_control",
+    "error": {
+      "class": "Error",
+      "message": "boom"
+    },
+    "fallback": {
+      "retryable": true,
+      "action": "Verify the job_id from start, or start a new job if the old one expired.",
+      "alternatives": ["start", "wait", "tail"]
+    },
+    "required_action": "Verify the job_id from start, or start a new job if the old one expired.",
+    "receipt": {
+      "route": "worker",
+      "tool": "get",
+      "category": "job_control",
+      "input_bytes": 24,
+      "output_bytes": 345,
+      "summary_bytes": 345,
+      "artifact_refs": [],
+      "truncated": false,
+      "cached": false,
+      "status": "error",
+      "abnormal": {
+        "verdict": "repair",
+        "reason_code": "failed_check",
+        "confidence": 0.94,
+        "required_action": "summarize_failure_and_repair",
+        "issues": [
+          {
+            "reason_code": "failed_check",
+            "severity": "medium",
+            "note": "Worker reported an error status; return compact evidence and a repair action instead of raw output."
+          }
+        ],
+        "repair_prompt": "Repair worker output for get/job_control. Return the same public payload shape, keep existing fields compatible, and do not add extra model calls. Preserve the failed status, include the compact failure evidence, and provide the smallest next repair action.",
+        "reviewer": {
+          "required": true,
+          "route": "cheap_review",
+          "tool": "review",
+          "reason_code": "failed_check",
+          "focus": "Verify the compact evidence and decide whether another repair pass is justified.",
+          "max_tokens": 512
+        }
+      }
+    }
+  },
+  "start_rejection": {
+    "status": "rejected",
+    "reason": "permission_mode=bypassPermissions is disabled",
+    "required_action": "Use permission_mode=acceptEdits, auto, default, dontAsk, or plan; set ALLOW_BYPASS_PERMISSIONS=1 only when this workspace intentionally permits bypass.",
+    "fallback": {
+      "retryable": true,
+      "action": "Use permission_mode=acceptEdits, auto, default, dontAsk, or plan; set ALLOW_BYPASS_PERMISSIONS=1 only when this workspace intentionally permits bypass.",
+      "alternatives": ["start"]
+    },
+    "receipt": {
+      "route": "worker",
+      "tool": "start",
+      "category": "implementation",
+      "input_bytes": 73,
+      "output_bytes": 250,
+      "summary_bytes": 468,
+      "artifact_refs": [],
+      "truncated": false,
+      "cached": false,
+      "status": "ok",
+      "abnormal": {
+        "verdict": "accept",
+        "confidence": 0.97,
+        "issues": []
+      }
+    }
+  },
+  "wait_poll_timeout": {
+    "status": "rejected",
+    "reason": "wait timeout after 1000ms; job is still running",
+    "required_action": "Call wait again with a longer timeout_ms, or use get/tail while the job is still running.",
+    "fallback": {
+      "retryable": true,
+      "action": "Call wait again with a longer timeout_ms, or use get/tail while the job is still running.",
+      "alternatives": ["wait", "get", "tail"]
+    },
+    "receipt": {
+      "route": "worker",
+      "tool": "wait",
+      "category": "job_control",
+      "input_bytes": 44,
+      "output_bytes": 190,
+      "summary_bytes": 358,
+      "artifact_refs": [],
+      "truncated": false,
+      "cached": false,
+      "status": "ok",
+      "abnormal": {
+        "verdict": "accept",
+        "confidence": 0.97,
+        "issues": []
+      }
+    }
+  },
+  "cancel_existing_terminal": {
+    "id": "terminal-job",
+    "server_version": "2.5.0",
+    "job_status": "completed",
+    "changed_files": [],
+    "preexisting_changed_files": [],
+    "checks": [],
+    "diff": "",
+    "revise_passes": 0,
+    "reliability": {
+      "tier": "standard",
+      "blocking_policy": "observe",
+      "semantic_gate": "off",
+      "required_gates": [],
+      "satisfied_gates": [],
+      "missing_gates": [],
+      "warnings": [],
+      "blocking_risk": "none"
+    },
+    "summary": "done",
+    "receipt": {
+      "route": "worker",
+      "tool": "cancel",
+      "category": "job_control",
+      "input_bytes": 62,
+      "output_bytes": 275,
+      "summary_bytes": 359,
+      "artifact_refs": ["artifact://<normalized>"],
+      "truncated": true,
+      "cached": false,
+      "status": "ok",
+      "abnormal": {
+        "verdict": "accept",
+        "confidence": 0.97,
+        "issues": []
+      }
+    }
+  }
+}

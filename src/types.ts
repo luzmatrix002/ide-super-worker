@@ -1,4 +1,5 @@
 import type { ReasoningReport } from "./reasoning.js";
+import type { OutcomeV1, VerificationPolicyV1 } from "./outcome.js";
 
 export type JobStatus = "running" | "completed" | "failed" | "cancelled";
 
@@ -149,6 +150,7 @@ export interface JobState {
   id: string;
   pid?: number;
   status: JobStatus;
+  outcome: OutcomeV1;
   command: string;
   args: string[];
   cwd: string;
@@ -156,7 +158,10 @@ export interface JobState {
   allowedDirs: string[];
   scopedPatch?: ResolvedScopedPatch;
   checks: CheckCommand[];
+  /** Frozen 2.5 projection: pre-existing files inside the declared scope. */
   preexistingChangedFiles: string[];
+  /** Full baseline used only for Outcome attribution; never projected into legacy fields. */
+  outcomeBaselineChangedFiles: string[];
   started_at: string;
   ended_at?: string;
   exit_code?: number | null;
@@ -190,6 +195,7 @@ export interface JobState {
 export interface StartJobInput {
   prompt: string;
   allowed_dirs: string[];
+  verification_policy?: VerificationPolicyV1;
   model?: string;
   permission_mode?: PermissionMode;
   allowed_tools?: string[];

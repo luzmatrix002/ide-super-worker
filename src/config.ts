@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 export const DEFAULT_MODEL = "Qwen3.6-35B-A3B-APEX-I-Compact.gguf";
 export const DEFAULT_CLAUDE_CLI_MODEL = "sonnet";
-export const SERVER_VERSION = "2.5.0";
+export const SERVER_VERSION = "2.6.0";
 
 function readBooleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];

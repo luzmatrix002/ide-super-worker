@@ -4,6 +4,8 @@ Stop spending premium Codex context on bulk code reading, patch loops, and giant
 
 `ide-super-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
 
+> **2.6 measurement status:** the repository now has paired cost/quality instrumentation and fail-closed acceptance, but no real 10-pair pilot or formal 200-task evaluation is bundled. Treat savings and non-inferiority as unproven until those gates pass; do not expand default automatic routing from this release alone.
+
 ![IDE Super Worker efficiency lane](docs/efficiency-lane.svg)
 
 ## Efficiency First
@@ -96,11 +98,14 @@ This project gives you the missing plumbing:
 - Receipt abnormal-output assessment: every receipt carries a deterministic accept/repair verdict and bounded repair guidance without default multi-model voting.
 - Runtime tool containment: the worker classifies tool errors, opens per-tool/per-error-class circuits, intercepts unhealthy routes, and uses deterministic fallbacks for `review`/`analyze` when the LLM route is unhealthy.
 - Reliability tiers and episode summaries: `start` can record `lite`, `standard`, `strict`, or `critical` expectations without blocking old callers; hard rejection happens only with `blocking_policy:"enforce"`.
+- Outcome v1: job-control, rejection, and failure payloads add one versioned semantic outcome while preserving the 2.5 legacy projection.
+- Independent semantic verification: `semantic_gate:"required"` performs a dedicated cache-free review and fails closed when evidence is missing or inconclusive.
 - Anthropic-to-OpenAI adapter: lets Claude Code talk to OpenAI-compatible gateways.
 - 429 and 5xx retry handling with `Retry-After` support.
 - Optional `include_diff:false` to return only `changed_files` and `checks`.
 - Deterministic verification layer: scope checks, command checks, result signals, and bounded auto-revise.
 - Cost telemetry: writes gateway token usage and worker tool-call categories to JSONL when `WORKER_METRICS_FILE` is set.
+- Paired evaluation telemetry: validates and imports direct/worker EvalSpan JSONL into a separate `WORKER_EVAL_SPAN_FILE`.
 - Optional fallback gateway when the primary provider fails.
 - Optional worktree isolation for parallel jobs inside one repository.
 - Secret redaction in logs and tool responses.
@@ -122,10 +127,10 @@ Use it when you want Codex to stay sharp instead of stuffed:
 | Tool | Purpose |
 | --- | --- |
 | `start` | Start an async Claude Code job in an allowed directory. Supports optional sequential `stages`. |
-| `get` | Read current job status and compact structured result; pass `verbose:true` for the full legacy payload. |
+| `get` | Read current job lifecycle plus authoritative `outcome`; pass `verbose:true` for the full legacy payload. |
 | `get_artifact_slice` | Read a bounded redacted slice from an artifact referenced by a worker receipt. |
 | `tail` | Read recent worker logs. |
-| `wait` | Wait for completion without killing the job on timeout; pass `verbose:true` for the full legacy payload. |
+| `wait` | Wait for completion without killing the job on poll timeout; a poll timeout keeps `outcome.status="running"`. |
 | `cancel` | Kill a running job process tree. |
 | `analyze` | Read-only cheap-model analysis for selected files or bounded globs. |
 | `review` | Cheap-model review of a job diff/checks or selected files, returning a structured verdict. |
@@ -172,7 +177,7 @@ args = ["D:/path/to/ide-super-worker/dist/index.js"]
 cwd = "D:/path/to/ide-super-worker"
 startup_timeout_sec = 10
 tool_timeout_sec = 3600
-env = { SANDBOX_ROOT = "D:/workspaces", ONEAPI_BASE_URL = "https://your-gateway.example.com/v1", CLAUDE_MODEL = "deepseek-v4-flash", CLAUDE_CODE_MODEL = "sonnet", CLAUDE_PERMISSION_MODE = "acceptEdits", USE_OPENAI_ADAPTER = "1", WAIT_DEFAULT_MS = "1800000" }
+env = { SANDBOX_ROOT = "D:/workspaces", ONEAPI_BASE_URL = "https://your-gateway.example.com/v1", CLAUDE_MODEL = "deepseek-v4-flash", CLAUDE_CODE_MODEL = "sonnet", WORKER_SEMANTIC_REVIEW_MODEL = "deepseek-v4-pro", CLAUDE_PERMISSION_MODE = "acceptEdits", USE_OPENAI_ADAPTER = "1", WAIT_DEFAULT_MS = "1800000" }
 env_vars = ["ONEAPI_API_KEY"]
 ```
 
@@ -185,6 +190,8 @@ env_vars = ["ONEAPI_API_KEY"]
   "model": "deepseek-v4-flash",
   "permission_mode": "acceptEdits",
   "include_diff": false,
+  "verification_policy": { "version": 1, "task_kind": "modifying" },
+  "semantic_gate": "required",
   "scoped_patch": {
     "paths": ["src", "tests"],
     "max_diff_bytes": 20000
@@ -199,12 +206,29 @@ Typical result:
 
 ```json
 {
+  "contract_version": "outcome.v1",
+  "outcome": {
+    "status": "accepted",
+    "reason_codes": ["verification_passed"],
+    "verification": {
+      "executor": "passed",
+      "scope": "passed",
+      "checks": "passed",
+      "semantic": "passed"
+    }
+  },
   "job_status": "completed",
   "changed_files": ["src/a.ts", "tests/a.test.ts"],
   "checks": ["scoped_patch: passed (src, tests)", "unit tests: passed"],
   "diff": ""
 }
 ```
+
+`outcome` is authoritative for acceptance. `job_status`, `status`, `receipt`, `abnormal`, and the verbose result retain their 2.5 meanings as compatibility projections; they remain throughout 2.x for at least 90 days and can only be removed in 3.0. A legacy request without `verification_policy` still executes, but its Outcome cannot become `accepted`.
+
+Outcome v1 also fails closed as `needs_evidence` when the starting worktree is already dirty, Git cannot provide a reliable change summary, reviewer input is truncated, or a multi-stage pipeline lacks complete prior-stage evidence. Legacy execution is not blocked, but those cases are not claimed as accepted.
+
+Outcome v1 workspace evidence is Git-based. Jobs with additional writable roots cannot become `accepted`, and Git-ignored file contents or side effects outside the workspace are not attested in 2.6. Prefer isolated worktrees and keep ignored/runtime data out of the declared modification scope; full WorkspaceCapsule evidence remains a later iteration.
 
 Use `include_diff:false` by default when Codex only needs to decide whether the job succeeded. Ask for the diff only when you actually need to review patch details.
 
@@ -223,6 +247,7 @@ These controls reduce main-thread context, payload size, and accounting noise; t
 - `review` and `WORKER_FAILURE_DIGEST=1` move diff review and failure diagnosis to the cheaper gateway.
 - `read_pack`, `diff_digest`, `shell digest`, `apply_edits`, `history`, and `draft` move the remaining high-token planning/review chores into worker lanes.
 - `WORKER_METRICS_FILE` records real gateway token usage plus `event=tool_call` rows for zero-LLM worker calls.
+- `WORKER_EVAL_SPAN_FILE` stores validated paired-evaluation records separately; it never falls back to `JobResult.total_cost_usd`.
 - `WORKER_ESCALATE_MODEL` upgrades only failed, difficult revise passes.
 - `WORKER_RELIABILITY_TIER`, `WORKER_BLOCKING_POLICY`, `WORKER_SEMANTIC_GATE`, and `WORKER_TOOL_BUDGET` record reliability expectations and blocking risk. Defaults are observe-only to avoid surprise stalls.
 - `WORKER_ISOLATION=worktree` allows safe parallel work in one repo.
@@ -262,6 +287,8 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
 | `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |
 | `WORKER_METRICS_FILE` | Optional JSONL path for token usage metrics. |
+| `WORKER_EVAL_SPAN_FILE` | Optional, separate JSONL path for validated direct/worker EvalSpan records. |
+| `WORKER_EVAL_SUITE_ID` / `WORKER_EVAL_TASK_ID` / `WORKER_EVAL_RUN_ID` / `WORKER_EVAL_ARM` | Optional correlation context appended to worker metrics during isolated eval runs. |
 | `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`; accounting only, never a worker LLM cost gate. |
 | `WORKER_PRICE_TABLE` | Optional JSON model price overrides for `npm run stats`; must not affect primary/fallback/escalation selection. |
 | `WORKER_FAILURE_DIGEST` | Set `1` to generate a cheap-gateway diagnosis on failed jobs. |
@@ -294,6 +321,8 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | `WORKER_RELIABILITY_TIER` | Default `start` reliability profile: `lite`, `standard`, `strict`, or `critical`; default `standard`. |
 | `WORKER_BLOCKING_POLICY` | How missing reliability gates behave: `observe`, `warn`, or `enforce`; default `observe`. |
 | `WORKER_SEMANTIC_GATE` | Declared semantic-review expectation: `off`, `warn`, or `required`; critical jobs default to `warn`. |
+| `WORKER_SEMANTIC_REVIEW_MODEL` | Dedicated model used for the independent semantic verifier. Required for a `required` gate to pass. |
+| `WORKER_SEMANTIC_REVIEW_TIMEOUT_MS` | End-to-end semantic-review deadline, default `60000`, capped at 5 minutes. |
 | `WORKER_TOOL_BUDGET` | Optional advisory max tool-call budget recorded in metrics and reliability profile. |
 | `WORKER_ISOLATION` | Set to `worktree` for per-job git worktree isolation. |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` | Optional fallback gateway. |
@@ -317,6 +346,8 @@ npm run test
 npm run smoke
 npm run doctor:network
 npm run skills:validate
+npm run eval:contracts
+npm run eval:fixtures
 npm run codex:audit -- --since-minutes=60
 npm run codex:guard
 ```
@@ -326,6 +357,8 @@ npm run codex:guard
 `npm run codex:audit -- --since-minutes=60` checks recent worker metrics, receipt artifact coverage, the persisted `AGENTS.md` routing rules, fallback usage, and worker category evidence. It also prints the known blind spot: direct main-thread shell output, full-file reads, chat context, and pasted prompts are outside `WORKER_METRICS_FILE`.
 
 `npm run codex:guard` runs the local Codex audit and then `stats:gate`.
+
+`npm run eval:contracts` validates the EvalSpan v1 importer and paired/pilot fail-closed rules. `npm run eval:fixtures` verifies the frozen 10-task pilot corpus and its SHA-256. Import external usage with `npm run eval:gate -- --import producer.jsonl --out .eval/eval-spans.jsonl`; gate a completed pilot with `npm run eval:gate -- --input .eval/eval-spans.jsonl --mode pilot`. The pilot proves measurement completeness only, not cost savings or quality non-inferiority. The full producer and formal-manifest contract is in [eval/README.md](eval/README.md); run the preregistered 200-400 task gate with `npm run eval:formal -- --input <spans.jsonl> --manifest <manifest.json>`.
 
 `npm run skills:validate` checks the project-specific `.claude/skills/` library used to preserve project doctrine for cheaper or lower-context worker sessions.
 
