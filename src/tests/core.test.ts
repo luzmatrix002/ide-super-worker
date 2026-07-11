@@ -1058,7 +1058,7 @@ const shellFailResult = await workerTools.runWorkerShell({
 assert.equal(shellFailResult.status, "failed");
 assert.equal((shellFailResult as any).failure_kind, "test_failure");
 assert(String((shellFailResult as any).required_action).includes("Fix the failing test"));
-assert.equal((shellFailResult.receipt as any).status, "error");
+assert.equal((shellFailResult.receipt as any).status, "ok");
 const shellBusinessFailureMetric = server.workerMetricStatusFromPayload(shellFailResult) as any;
 assert.equal(shellBusinessFailureMetric.status, "ok");
 assert.equal(shellBusinessFailureMetric.extra.command_status, "failed");

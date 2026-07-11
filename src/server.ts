@@ -4,8 +4,9 @@ import { spawn, spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { attachReceipt, createReceipt, getArtifactSlice, receiptMetricExtra, saveArtifact } from "./artifacts.js";
+import { attachReceipt, createReceipt, getArtifactSlice, saveArtifact } from "./artifacts.js";
 import { ensureAnthropicOpenAIAdapter, shouldUseOpenAIAdapter } from "./anthropic_openai_adapter.js";
+import { classifyToolMetricPayload, type ToolMetricStatus } from "./failure_semantics.js";
 import { analyzeDirect, buildEvidencePack, digestFailure, reviewDirect, reviewWithEvidence } from "./lite.js";
 import {
   AUTO_REVISE_ENABLED,
@@ -262,72 +263,8 @@ function rejectedJson(
   return { contract_version: OUTCOME_CONTRACT_VERSION, outcome, ...payload };
 }
 
-type ToolMetricStatus = "ok" | "error" | "rejected";
-
-function payloadObjectFromValue(value: unknown): Record<string, any> | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  if ("receipt" in value) return value as Record<string, any>;
-  const content = "content" in value ? (value as { content?: unknown }).content : undefined;
-  const text = Array.isArray(content) && typeof content[0]?.text === "string" ? content[0].text : undefined;
-  if (!text) return undefined;
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, any>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function workerMetricStatusFromPayload(value: unknown): { status: ToolMetricStatus; extra: Record<string, unknown> } {
-  const payload = payloadObjectFromValue(value);
-  const receipt = payload?.receipt;
-  if (!receipt) return { status: "ok", extra: {} };
-
-  const outcome = payload?.outcome;
-  const extra = {
-    ...receiptMetricExtra(receipt),
-    ...(typeof outcome?.status === "string" ? { outcome_status: outcome.status } : {}),
-    ...(Array.isArray(outcome?.reason_codes) ? { outcome_reason_codes: outcome.reason_codes } : {}),
-    ...(typeof outcome?.verification?.semantic === "string"
-      ? { verification_semantic: outcome.verification.semantic }
-      : {})
-  };
-  const payloadStatus = typeof payload.status === "string" ? payload.status : undefined;
-  const jobStatus = typeof payload.job_status === "string" ? payload.job_status : payloadStatus;
-  if (payloadStatus === "rejected") return { status: "rejected", extra };
-
-  if (receipt.status === "error") {
-    if (
-      receipt.tool === "shell" &&
-      receipt.category === "command_digest" &&
-      (payloadStatus === "failed" || payloadStatus === "timeout")
-    ) {
-      return {
-        status: "ok",
-        extra: {
-          ...extra,
-          command_status: payloadStatus,
-          exit_code: payload.exit_code,
-          failure_kind: payload.failure_kind,
-          required_action: payload.required_action,
-          repair_route: "worker_local"
-        }
-      };
-    }
-    if (receipt.category === "job_control" && ["running", "completed", "failed", "cancelled"].includes(String(jobStatus))) {
-      return {
-        status: "ok",
-        extra: {
-          ...extra,
-          job_status: jobStatus,
-          repair_route: jobStatus === "failed" ? "worker_local" : undefined
-        }
-      };
-    }
-    return { status: "error", extra };
-  }
-
-  return { status: "ok", extra };
+  return classifyToolMetricPayload(value);
 }
 
 const TOOL_CATEGORIES: Record<string, WorkerCategory> = {

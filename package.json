@@ -24,7 +24,7 @@
     "stats": "node scripts/stats.mjs",
     "stats:gate": "node scripts/stats.mjs --gate --since-minutes=60",
     "smoke": "npm run build && node dist/smoke_test.js",
-    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js && node dist/tests/fanout.test.js && node dist/tests/evidence_delivery.test.js"
+    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js && node dist/tests/fanout.test.js && node dist/tests/evidence_delivery.test.js && node dist/tests/failure_semantics.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

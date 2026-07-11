@@ -8,6 +8,12 @@ import {
   type ContextPackFile,
   type ContextPackPayload
 } from "./evidence_delivery.js";
+import {
+  assessShellFailure,
+  buildShellFailureProjection,
+  shellToolDisposition,
+  type ShellCommandStatus
+} from "./failure_semantics.js";
 import { digestFailure, reviewDirect } from "./lite.js";
 import { killProcessTree } from "./process.js";
 import { redactSecrets } from "./redact.js";
@@ -286,53 +292,6 @@ function looksDestructive(command: string): boolean {
   return /\b(rm\s+-rf|Remove-Item\b.*\b-Recurse\b|del\s+\/[fsq]|rmdir\s+\/s|git\s+reset\s+--hard|git\s+clean\s+-fd|format\s+[A-Z]:|drop\s+database)\b/i.test(command);
 }
 
-type ShellCommandStatus = "passed" | "failed" | "timeout";
-type ShellFailureKind =
-  | "timeout"
-  | "shell_mismatch"
-  | "missing_command"
-  | "test_failure"
-  | "typecheck_failure"
-  | "dependency_missing"
-  | "permission_denied"
-  | "unknown_failure";
-
-function assessShellFailure(command: string, status: ShellCommandStatus, output: string): ShellFailureKind | undefined {
-  if (status === "passed") return undefined;
-  const combined = `${command}\n${output}`;
-  if (status === "timeout" || /timed out|timeout/i.test(output)) return "timeout";
-  if (/\b(Get-Content|ForEach-Object|Write-Output|Remove-Item|Set-Location|Select-String|Get-ChildItem)\b|\$[A-Za-z_][A-Za-z0-9_]*/.test(command)) {
-    return "shell_mismatch";
-  }
-  if (/TS\d{4}:|TypeScript|tsc\b/i.test(combined)) return "typecheck_failure";
-  if (/AssertionError|ERR_ASSERTION|\bFAIL\b|tests? failed|failing tests?|failed tests?/i.test(output)) return "test_failure";
-  if (/Cannot find module|MODULE_NOT_FOUND|npm ERR! missing|ENOENT/i.test(output)) return "dependency_missing";
-  if (/not recognized|command not found|executable file not found|ENOENT/i.test(output)) return "missing_command";
-  if (/EACCES|EPERM|permission denied|access is denied/i.test(output)) return "permission_denied";
-  return "unknown_failure";
-}
-
-function shellFailureAction(kind: ShellFailureKind): string {
-  switch (kind) {
-    case "timeout":
-      return "Split the command or increase timeout_ms only if the longer wait is intentional; inspect the artifact output before retrying.";
-    case "shell_mismatch":
-      return "Rewrite the command for the active shell, or wrap PowerShell syntax with powershell -NoProfile -Command before retrying.";
-    case "missing_command":
-      return "Verify the executable or package script exists in this workspace, then retry with the correct command.";
-    case "test_failure":
-      return "Fix the failing test or application code using the compact digest and artifact output, then rerun the smallest failing command.";
-    case "typecheck_failure":
-      return "Fix the reported TypeScript/import/schema errors, then rerun the same typecheck command.";
-    case "dependency_missing":
-      return "Verify dependencies and module names; run install only when dependency installation is intended for this workspace.";
-    case "permission_denied":
-      return "Adjust the command path or permissions inside the sandbox; do not bypass permissions unless explicitly intended.";
-    default:
-      return "Inspect the compact digest and artifact output, reduce to a focused repro, then retry the smallest corrective command.";
-  }
-}
-
 export function shouldAutoReroutePowerShellCommand(command: string): boolean {
   if (process.platform !== "win32") return false;
   if (/^\s*(?:powershell|pwsh)(?:\.exe)?\b/i.test(command)) return false;
@@ -451,7 +410,6 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
       : undefined;
   const commandStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
   const failureKind = assessShellFailure(command, commandStatus, output);
-  const requiredAction = failureKind ? shellFailureAction(failureKind) : undefined;
   const result = {
     cwd,
     command,
@@ -462,23 +420,7 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     digest,
     output: responseOutput,
     ...(reroutedFrom ? { rerouted_from: reroutedFrom, reroute_reason: rerouteReason } : {}),
-    ...(failureKind
-      ? {
-          failure_kind: failureKind,
-          required_action: requiredAction,
-          failure: {
-            kind: failureKind,
-            retryable: true,
-            route: "worker_local",
-            action: requiredAction
-          },
-          fallback: {
-            retryable: true,
-            action: requiredAction,
-            alternatives: ["read_pack", "diff_digest", "shell"]
-          }
-        }
-      : {})
+    ...(failureKind ? buildShellFailureProjection(failureKind) : {})
   };
   return attachReceipt(result, {
     tool: "shell",
@@ -487,7 +429,7 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     output,
     artifactRefs: artifact ? [artifact.artifact_ref] : [],
     truncated: outputBytes > responseOutputBytes,
-    status: commandStatus === "passed" ? "ok" : "error"
+    status: shellToolDisposition(commandStatus, failureKind)
   });
 }
 
