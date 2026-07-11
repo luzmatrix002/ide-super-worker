@@ -1836,20 +1836,13 @@ export function createCodexWorkerServer(): Server {
       if (name === "get") {
         const job = jobs.get(String(toolArgs.job_id || ""));
         if (!job) {
-          // P1: TTL expiry is a design behavior, not a system error. Return a
-          // degraded ok response with guidance instead of a rejection, so the
-          // metric status stays "ok" and doesn't inflate the rejection rate.
-          const degradedPayload = {
-            status: "ok",
-            degraded: true,
-            degradation_reason: "job_expired_or_unknown",
-            job_id: String(toolArgs.job_id || ""),
-            required_action: "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
-            fallback: { retryable: true, action: "Rerun start and poll the new job_id.", alternatives: ["start", "wait", "tail"] }
-          };
-          const result = attachReceipt(degradedPayload, { tool: "get", category: "job_control", input: toolArgs, output: degradedPayload });
-          rememberReceipt(result);
-          return okJson(result);
+          return reject(
+            "get",
+            "job_control",
+            "Job not found or expired",
+            "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
+            ["start", "wait", "tail"]
+          );
         }
         const result = publicJob(job, undefined, parseOptionalBoolean(toolArgs.verbose) ?? false, "get");
         rememberReceipt(result);
