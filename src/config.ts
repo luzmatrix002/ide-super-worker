@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 export const DEFAULT_MODEL = "Qwen3.6-35B-A3B-APEX-I-Compact.gguf";
 export const DEFAULT_CLAUDE_CLI_MODEL = "sonnet";
-export const SERVER_VERSION = "2.6.0";
+export const SERVER_VERSION = "2.6.1";
 
 function readBooleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
@@ -72,6 +72,21 @@ export const WAIT_DEFAULT_MS = readIntegerEnv("WAIT_DEFAULT_MS", 30 * 60 * 1000,
 export const WAIT_MAX_MS = readIntegerEnv("WAIT_MAX_MS", 6 * 60 * 60 * 1000, 1_000, 24 * 60 * 60 * 1000);
 export const MAX_RUNNING_JOBS = readIntegerEnv("MAX_RUNNING_JOBS", 4, 1, 100);
 export const MAX_STORED_JOBS = readIntegerEnv("MAX_STORED_JOBS", 100, 10, 10000);
+// --- Fan-out Coordinator (2.6.1) ---
+// WORKER_FANOUT_ENABLED: gate the entire fan-out feature. Default off; pilot
+//   callers must explicitly opt in.
+// WORKER_FANOUT_MAX_BRANCHES: upper bound on branches per fan-out request.
+// WORKER_FANOUT_MAX_ACTIVE: max concurrent fan-out operations (nested fan-out
+//   is always forbidden, but this limits overlapping top-level fan-outs).
+// WORKER_LITE_MAX_CONCURRENCY: max concurrent lite-path gateway calls
+//   (analyze, review, failure digest, fan-out branches, fan-out reviewer).
+// WORKER_FANOUT_TIMEOUT_MS: shared deadline for all branches + reviewer.
+export const FANOUT_ENABLED = readBooleanEnv("WORKER_FANOUT_ENABLED", false);
+export const FANOUT_MAX_BRANCHES = readIntegerEnv("WORKER_FANOUT_MAX_BRANCHES", 3, 2, 10);
+export const FANOUT_MAX_ACTIVE = readIntegerEnv("WORKER_FANOUT_MAX_ACTIVE", 1, 1, 10);
+export const LITE_MAX_CONCURRENCY = readIntegerEnv("WORKER_LITE_MAX_CONCURRENCY", 3, 1, 20);
+export const FANOUT_TIMEOUT_MS = readIntegerEnv("WORKER_FANOUT_TIMEOUT_MS", 90_000, 10_000, 300_000);
+
 export const DEFAULT_PERMISSION_MODE = process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
 export const INCLUDE_DIFF_DEFAULT = readBooleanEnv("INCLUDE_DIFF_DEFAULT", true);
 

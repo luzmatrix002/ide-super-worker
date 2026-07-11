@@ -15,6 +15,7 @@ import {
   getGatewayBaseUrl,
   getModelName
 } from "./config.js";
+import { liteSemaphore } from "./concurrency.js";
 import { appendMetrics, pickCacheTokens } from "./metrics.js";
 import { redactSecrets } from "./redact.js";
 import { isInsideDirectory } from "./security.js";
@@ -71,7 +72,8 @@ function liteCacheDir(): string | undefined {
 }
 
 /** Read a file only if it resolves inside SANDBOX_ROOT; truncated to a safe size. */
-function readSandboxedFile(input: string): string {
+/** Read a file only if it resolves inside SANDBOX_ROOT; truncated to a safe size. */
+export function readSandboxedFile(input: string): string {
   let real: string;
   try {
     real = fs.realpathSync.native(path.resolve(input));
@@ -128,7 +130,7 @@ function walkFiles(dir: string, out: string[]): void {
   }
 }
 
-function expandFiles(files: string[]): string[] {
+export function expandFiles(files: string[]): string[] {
   const expanded: string[] = [];
   const allFiles: string[] = [];
 
@@ -187,61 +189,87 @@ function writeCachedAnswer(tool: string, content: string, answer: string): void 
   fs.promises.writeFile(file, JSON.stringify({ ts: Date.now(), answer }), "utf8").catch(() => undefined);
 }
 
-async function callLiteCompletion(request: string | LiteRequest, maxTokens: number, tool: string): Promise<string> {
+export async function callLiteCompletion(request: string | LiteRequest, maxTokens: number, tool: string): Promise<string> {
   const liteRequest = typeof request === "string" ? { messages: [{ role: "user", content: request }] } : request;
   const cacheContent = JSON.stringify(liteRequest);
   const cached = readCachedAnswer(tool, cacheContent);
   if (cached !== undefined) return cached;
+  const ticket = await liteSemaphore.acquire();
   let lastError: unknown;
-  for (const target of liteTargets()) {
-    try {
-      const response = await fetch(`${target.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(target.apiKey ? { authorization: `Bearer ${target.apiKey}` } : {})
-        },
-        body: JSON.stringify({
-          model: target.model,
-          ...(liteRequest.system ? { system: liteRequest.system } : {}),
-          messages: liteRequest.messages,
-          max_tokens: maxTokens,
-          stream: false
-        })
-      });
-
-      if (!response.ok) {
-        lastError = new Error(`${target.label} upstream returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
-        continue;
+  let isFirstAttempt = true;
+  try {
+    for (const target of liteTargets()) {
+      // P3: Add jitter before retrying the next upstream target. The first
+      // attempt has no delay (don't penalise the happy path). Subsequent
+      // attempts wait 0–500ms to avoid a thundering-herd pulse when multiple
+      // concurrent requests all fail over to the same next target.
+      if (!isFirstAttempt) {
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * 500));
       }
+      isFirstAttempt = false;
+      try {
+        const response = await fetch(`${target.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(target.apiKey ? { authorization: `Bearer ${target.apiKey}` } : {})
+          },
+          body: JSON.stringify({
+            model: target.model,
+            ...(liteRequest.system ? { system: liteRequest.system } : {}),
+            messages: liteRequest.messages,
+            max_tokens: maxTokens,
+            stream: false
+          })
+        });
 
-      const data = await response.json();
-      appendMetrics({
-        route: target.label,
-        tool,
-        model: data.model || target.model,
-        prompt_tokens: data.usage?.prompt_tokens ?? 0,
-        completion_tokens: data.usage?.completion_tokens ?? 0,
-        cache_hit_tokens: pickCacheTokens(data.usage),
-        cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null
-      });
+        if (!response.ok) {
+          lastError = new Error(`${target.label} upstream returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
+          continue;
+        }
 
-      const answer = data.choices?.[0]?.message?.content;
-      const redacted = redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
-      writeCachedAnswer(tool, cacheContent, redacted);
-      return redacted;
-    } catch (error) {
-      lastError = error;
+        const data = await response.json();
+        appendMetrics({
+          route: target.label,
+          tool,
+          model: data.model || target.model,
+          prompt_tokens: data.usage?.prompt_tokens ?? 0,
+          completion_tokens: data.usage?.completion_tokens ?? 0,
+          cache_hit_tokens: pickCacheTokens(data.usage),
+          cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null
+        });
+
+        const answer = data.choices?.[0]?.message?.content;
+        const redacted = redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
+        writeCachedAnswer(tool, cacheContent, redacted);
+        return redacted;
+      } catch (error) {
+        lastError = error;
+      }
     }
+  } finally {
+    ticket.release();
   }
 
   throw lastError instanceof Error ? lastError : new Error(`${tool} failed on all upstreams`);
 }
 
 export async function analyzeDirect(prompt: string, files: string[] = [], maxTokens?: number): Promise<string> {
+  const evidence = buildEvidencePack(files);
+  return analyzeWithEvidence(prompt, evidence, maxTokens);
+}
+
+/** Build an immutable EvidencePack from the given file list. Reads each file once. */
+export function buildEvidencePack(files: string[]): {
+  content: string;
+  fileCount: number;
+  totalBytes: number;
+  truncated: boolean;
+} {
   const expandedFiles = expandFiles(files);
   const fileParts: string[] = [];
   let totalBytes = 0;
+  let truncated = false;
   for (const file of expandedFiles) {
     const content = readSandboxedFile(file);
     totalBytes += Buffer.byteLength(content, "utf8");
@@ -250,20 +278,37 @@ export async function analyzeDirect(prompt: string, files: string[] = [], maxTok
     }
     fileParts.push(`\n# FILE: ${file}\n${content}`);
   }
+  return {
+    content: fileParts.join("\n"),
+    fileCount: expandedFiles.length,
+    totalBytes,
+    truncated
+  };
+}
+
+/** Run an analyze call with a pre-built EvidencePack (used by fan-out branches). */
+export function analyzeWithEvidence(
+  prompt: string,
+  evidence: { content: string; fileCount: number; totalBytes: number; truncated: boolean },
+  maxTokens?: number,
+  focus?: string
+): Promise<string> {
+  const focusLine = focus ? `\n# BRANCH FOCUS\n${focus}\n` : "";
   if (ADAPTER_PREFIX_CACHE) {
     const request: LiteRequest = {
       system: "You are a read-only code analyst. Answer concisely based only on the files below.",
       messages: [
-        { role: "user", content: fileParts.join("\n") || "(no files provided)" },
+        { role: "user", content: evidence.content || "(no files provided)" },
         { role: "assistant", content: "Understood. Ready to answer questions about these files." },
-        { role: "user", content: `# QUESTION\n${prompt.trim()}` }
+        { role: "user", content: `${focusLine}\n# QUESTION\n${prompt.trim()}` }
       ]
     };
     return callLiteCompletion(request, maxTokens && maxTokens > 0 ? Math.trunc(maxTokens) : 1024, "analyze");
   }
   const content = [
     "You are a read-only code analyst. Answer concisely based only on the files below.",
-    ...fileParts,
+    evidence.content,
+    focusLine,
     `\n# QUESTION\n${prompt.trim()}`
   ].join("\n");
 
@@ -295,17 +340,31 @@ export async function reviewDirect(input: {
   focus?: string;
   maxTokens?: number;
 }): Promise<string> {
-  const fileParts: string[] = [];
-  for (const file of expandFiles(input.files || [])) {
-    fileParts.push(`\n# FILE: ${file}\n${readSandboxedFile(file)}`);
-  }
+  const evidence = buildEvidencePack(input.files || []);
+  return reviewWithEvidence({
+    diff: input.diff,
+    checks: input.checks,
+    evidenceContent: evidence.content,
+    focus: input.focus,
+    maxTokens: input.maxTokens
+  });
+}
+
+/** Run a review call with pre-built evidence content (used by fan-out branches). */
+export function reviewWithEvidence(input: {
+  diff?: string;
+  checks?: string[];
+  evidenceContent: string;
+  focus?: string;
+  maxTokens?: number;
+}): Promise<string> {
   const content = [
     "Review the provided diff or files. Return ONLY JSON with this shape:",
     '{"verdict":"approve|needs_changes|risky","issues":[{"file":"path","line":1,"severity":"low|medium|high","note":"short"}],"summary":"short"}',
     input.focus ? `\n# FOCUS\n${input.focus}` : "",
     input.diff ? `\n# DIFF\n${input.diff}` : "",
     input.checks?.length ? `\n# CHECKS\n${input.checks.join("\n\n")}` : "",
-    ...fileParts
+    input.evidenceContent
   ].join("\n");
   return callLiteCompletion(content, input.maxTokens && input.maxTokens > 0 ? Math.trunc(input.maxTokens) : 800, "review");
 }

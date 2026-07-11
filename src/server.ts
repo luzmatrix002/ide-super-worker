@@ -6,11 +6,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { attachReceipt, createReceipt, getArtifactSlice, receiptMetricExtra, saveArtifact } from "./artifacts.js";
 import { ensureAnthropicOpenAIAdapter, shouldUseOpenAIAdapter } from "./anthropic_openai_adapter.js";
-import { analyzeDirect, digestFailure, reviewDirect } from "./lite.js";
+import { analyzeDirect, buildEvidencePack, digestFailure, reviewDirect, reviewWithEvidence } from "./lite.js";
 import {
   AUTO_REVISE_ENABLED,
   CHECK_OUTPUT_RESPONSE_MAX,
   DIGEST_BEFORE_REVISE,
+  FANOUT_ENABLED,
   FAILURE_DIGEST_ENABLED,
   INCLUDE_DIFF_DEFAULT,
   MAX_REVISE_PASSES,
@@ -22,6 +23,13 @@ import {
   WAIT_MAX_MS,
   allowBypassPermissions
 } from "./config.js";
+import {
+  checkFanoutAvailability,
+  fanoutCoordinator,
+  validateBranches,
+  validateFanoutEvidence,
+  FanoutValidationError
+} from "./fanout.js";
 import { buildClaudeLaunchPlan, type ClaudeLaunchPlan } from "./claude.js";
 import { parseCheckCommands, runCheckCommands, type CheckResult } from "./checks.js";
 import {
@@ -568,6 +576,56 @@ export function preflightStartRejection(args: Record<string, unknown>) {
       "Use permission_mode=acceptEdits, auto, default, dontAsk, or plan; set ALLOW_BYPASS_PERMISSIONS=1 only when this workspace intentionally permits bypass."
     );
   }
+
+  // P4: Enhanced preflight — verify allowed_dirs paths exist and are accessible
+  // before spawning claude. This converts generic unknown_failure errors into
+  // specific missing_path rejections with actionable guidance.
+  const rawAllowedDirs = Array.isArray(args.allowed_dirs)
+    ? args.allowed_dirs.map(String).filter(Boolean)
+    : [];
+  if (rawAllowedDirs.length > 0) {
+    for (const dir of rawAllowedDirs) {
+      try {
+        const absolute = path.isAbsolute(dir) ? path.resolve(dir) : path.resolve(SANDBOX_ROOT, dir);
+        if (!fs.existsSync(absolute)) {
+          return rejectedJson(
+            "start",
+            "implementation",
+            args,
+            `allowed_dirs path does not exist: ${dir}`,
+            "Correct the allowed_dirs path inside SANDBOX_ROOT before retrying start.",
+            ["read_pack", "diff_digest", "shell"]
+          );
+        }
+      } catch {
+        return rejectedJson(
+          "start",
+          "implementation",
+          args,
+          `allowed_dirs path cannot be accessed: ${dir}`,
+          "Verify the path exists and is readable inside SANDBOX_ROOT before retrying start.",
+          ["read_pack", "diff_digest", "shell"]
+        );
+      }
+    }
+  }
+
+  // P4: Verify model field if provided — empty model causes claude spawn failure
+  // that gets classified as unknown_failure.
+  if (args.model !== undefined && args.model !== null) {
+    const model = String(args.model).trim();
+    if (!model) {
+      return rejectedJson(
+        "start",
+        "implementation",
+        args,
+        "model must be a non-empty string when provided",
+        "Provide a valid model name, or omit the model field to use the default.",
+        ["read_pack", "diff_digest", "shell"]
+      );
+    }
+  }
+
   const reliability = buildReliabilityProfile(
     { ...args, ...normalizeReliabilityArgs(args) } as Partial<StartJobInput>,
     { worktree: (process.env.WORKER_ISOLATION || "").toLowerCase() === "worktree" }
@@ -1569,13 +1627,35 @@ export function createCodexWorkerServer(): Server {
       {
         name: "analyze",
         description:
-          "Read-only analysis: read the given files (inside SANDBOX_ROOT) and answer in a single cheap-gateway call. Does NOT start Claude Code and does NOT modify any file. Use for summarize/explain/classify; use start for anything that edits or runs.",
+          "Read-only analysis: read the given files (inside SANDBOX_ROOT) and answer in a single cheap-gateway call. Does NOT start Claude Code and does NOT modify any file. Use for summarize/explain/classify; use start for anything that edits or runs. Pass branches for concurrent fan-out analysis (requires WORKER_FANOUT_ENABLED=1).",
         inputSchema: {
           type: "object",
           properties: {
             prompt: { type: "string" },
             files: { type: "array", items: { type: "string" } },
-            max_tokens: { type: "number" }
+            max_tokens: { type: "number" },
+            branches: {
+              type: "array",
+              description: "2–3 independent focus areas for concurrent fan-out analysis. Each branch shares the same prompt/files but adds its own focus.",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  focus: { type: "string" },
+                  max_tokens: { type: "number" }
+                },
+                required: ["id", "focus"]
+              }
+            },
+            aggregate: {
+              type: "string",
+              enum: ["strong_review", "none"],
+              description: "When branches are provided, controls whether a synthesis reviewer runs after all branches complete. Defaults to strong_review."
+            },
+            deadline_ms: {
+              type: "number",
+              description: "Shared deadline for all branches and the reviewer. Default 90s, max 300s."
+            }
           },
           required: ["prompt"]
         }
@@ -1583,14 +1663,36 @@ export function createCodexWorkerServer(): Server {
       {
         name: "review",
         description:
-          "Cheap-gateway code review. Use job_id to review a finished worker diff/checks, or files to review selected sandbox files. Returns structured JSON verdict when parseable.",
+          "Cheap-gateway code review. Use job_id to review a finished worker diff/checks, or files to review selected sandbox files. Returns structured JSON verdict when parseable. Pass branches for concurrent fan-out review (requires WORKER_FANOUT_ENABLED=1).",
         inputSchema: {
           type: "object",
           properties: {
             job_id: { type: "string" },
             files: { type: "array", items: { type: "string" } },
             focus: { type: "string" },
-            max_tokens: { type: "number" }
+            max_tokens: { type: "number" },
+            branches: {
+              type: "array",
+              description: "2–3 independent review dimensions for concurrent fan-out review. Each branch shares the same job_id/files/focus but adds its own focus.",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  focus: { type: "string" },
+                  max_tokens: { type: "number" }
+                },
+                required: ["id", "focus"]
+              }
+            },
+            aggregate: {
+              type: "string",
+              enum: ["strong_review", "none"],
+              description: "When branches are provided, controls whether a synthesis reviewer runs after all branches complete. Defaults to strong_review."
+            },
+            deadline_ms: {
+              type: "number",
+              description: "Shared deadline for all branches and the reviewer. Default 90s, max 300s."
+            }
           }
         }
       },
@@ -1797,13 +1899,20 @@ export function createCodexWorkerServer(): Server {
       if (name === "get") {
         const job = jobs.get(String(toolArgs.job_id || ""));
         if (!job) {
-          return reject(
-            "get",
-            "job_control",
-            "Job not found",
-            "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
-            ["start", "wait", "tail"]
-          );
+          // P1: TTL expiry is a design behavior, not a system error. Return a
+          // degraded ok response with guidance instead of a rejection, so the
+          // metric status stays "ok" and doesn't inflate the rejection rate.
+          const degradedPayload = {
+            status: "ok",
+            degraded: true,
+            degradation_reason: "job_expired_or_unknown",
+            job_id: String(toolArgs.job_id || ""),
+            required_action: "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
+            fallback: { retryable: true, action: "Rerun start and poll the new job_id.", alternatives: ["start", "wait", "tail"] }
+          };
+          const result = attachReceipt(degradedPayload, { tool: "get", category: "job_control", input: toolArgs, output: degradedPayload });
+          rememberReceipt(result);
+          return okJson(result);
         }
         const result = publicJob(job, undefined, parseOptionalBoolean(toolArgs.verbose) ?? false, "get");
         rememberReceipt(result);
@@ -1867,8 +1976,51 @@ export function createCodexWorkerServer(): Server {
         }
         const files = Array.isArray(toolArgs.files) ? toolArgs.files.map(String) : [];
         const maxTokens = typeof toolArgs.max_tokens === "number" ? toolArgs.max_tokens : undefined;
-        const answer = await analyzeDirect(prompt, files, maxTokens);
-        return textResponse(answer);
+
+        // Fan-out path: if branches are provided, run concurrent analysis.
+        const branches = toolArgs.branches;
+        if (Array.isArray(branches) && branches.length > 0) {
+          const availabilityError = checkFanoutAvailability(branches);
+          if (availabilityError) {
+            return reject("analyze", "analysis", availabilityError, "Set WORKER_FANOUT_ENABLED=1 to enable fan-out, or omit branches for single-path analysis.", [
+              "read_pack"
+            ]);
+          }
+          try {
+            const validatedBranches = validateBranches(branches);
+            const evidence = buildEvidencePack(files);
+            validateFanoutEvidence(evidence);
+            const aggregate =
+              toolArgs.aggregate === "none" ? "none" as const
+              : toolArgs.aggregate === "strong_review" ? "strong_review" as const
+              : "strong_review" as const;
+            const deadlineMs = typeof toolArgs.deadline_ms === "number" ? toolArgs.deadline_ms : undefined;
+            const fanoutResult = await fanoutCoordinator.runAnalyze(prompt, evidence, validatedBranches, {
+              aggregate,
+              deadline_ms: deadlineMs
+            });
+            rememberReceipt(fanoutResult);
+            return okJson(fanoutResult);
+          } catch (error: any) {
+            if (error instanceof FanoutValidationError) {
+              return reject("analyze", "analysis", error.message, "Fix the branch/evidence validation error and retry.", [
+                "read_pack"
+              ]);
+            }
+            return fail("analyze", "analysis", error);
+          }
+        }
+
+        try {
+          const answer = await analyzeDirect(prompt, files, maxTokens);
+          return textResponse(answer);
+        } catch (error: any) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (msg.includes("exceed") && msg.includes("bytes")) {
+            return reject("analyze", "analysis", msg, "Narrow the file list or use read_pack on fewer, smaller files.", ["read_pack", "search"]);
+          }
+          return fail("analyze", "analysis", error);
+        }
       }
 
       if (name === "review") {
@@ -1890,14 +2042,68 @@ export function createCodexWorkerServer(): Server {
             "read_pack"
           ]);
         }
+
+        // Fan-out path: if branches are provided, run concurrent review.
+        const branches = toolArgs.branches;
+        if (Array.isArray(branches) && branches.length > 0) {
+          const availabilityError = checkFanoutAvailability(branches);
+          if (availabilityError) {
+            return reject("review", "review", availabilityError, "Set WORKER_FANOUT_ENABLED=1 to enable fan-out, or omit branches for single-path review.", [
+              "diff_digest", "read_pack"
+            ]);
+          }
+          try {
+            const validatedBranches = validateBranches(branches);
+            const fileReview = job ? { diff: undefined, files: [] } : reviewDiffForFiles(files);
+            const sharedEvidence = buildEvidencePack(fileReview.files.length > 0 ? fileReview.files : files);
+            validateFanoutEvidence(sharedEvidence);
+            const aggregate =
+              toolArgs.aggregate === "none" ? "none" as const
+              : toolArgs.aggregate === "strong_review" ? "strong_review" as const
+              : "strong_review" as const;
+            const deadlineMs = typeof toolArgs.deadline_ms === "number" ? toolArgs.deadline_ms : undefined;
+            const fanoutResult = await fanoutCoordinator.runReview(
+              {
+                task: typeof toolArgs.focus === "string" ? toolArgs.focus : `Review job ${jobId || "files"}`,
+                diff: job?.result.diff ?? fileReview.diff,
+                checks: job?.result.checks,
+                evidenceContent: sharedEvidence.content,
+                evidenceFileCount: sharedEvidence.fileCount,
+                evidenceTotalBytes: sharedEvidence.totalBytes,
+                evidenceTruncated: sharedEvidence.truncated
+              },
+              validatedBranches,
+              { aggregate, deadline_ms: deadlineMs }
+            );
+            rememberReceipt(fanoutResult);
+            return okJson(fanoutResult);
+          } catch (error: any) {
+            if (error instanceof FanoutValidationError) {
+              return reject("review", "review", error.message, "Fix the branch/evidence validation error and retry.", [
+                "diff_digest", "read_pack"
+              ]);
+            }
+            return fail("review", "review", error);
+          }
+        }
+
         const fileReview = job ? { diff: undefined, files: [] } : reviewDiffForFiles(files);
-        const raw = await reviewDirect({
-          diff: job?.result.diff ?? fileReview.diff,
-          checks: job?.result.checks,
-          files: fileReview.files,
-          focus: typeof toolArgs.focus === "string" ? toolArgs.focus : undefined,
-          maxTokens: typeof toolArgs.max_tokens === "number" ? toolArgs.max_tokens : undefined
-        });
+        let raw: string;
+        try {
+          raw = await reviewDirect({
+            diff: job?.result.diff ?? fileReview.diff,
+            checks: job?.result.checks,
+            files: fileReview.files,
+            focus: typeof toolArgs.focus === "string" ? toolArgs.focus : undefined,
+            maxTokens: typeof toolArgs.max_tokens === "number" ? toolArgs.max_tokens : undefined
+          });
+        } catch (error: any) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (msg.includes("exceed") && msg.includes("bytes")) {
+            return reject("review", "review", msg, "Narrow the file list or use diff_digest on a focused diff.", ["diff_digest", "read_pack"]);
+          }
+          return fail("review", "review", error);
+        }
         try {
           const result = attachReceipt(JSON.parse(raw), {
             tool: "review",
@@ -1935,6 +2141,13 @@ export function createCodexWorkerServer(): Server {
                 ? toolArgs.mode
                 : undefined
           });
+        // P0-B: Mark empty results as degraded so the caller (LLM) knows the
+        // search ran but found nothing — distinguishing "no matches" from a
+        // potential silent failure where the tool returned ok with no data.
+        if (!searchResult.degraded && searchResult.count === 0 && searchResult.results.length === 0) {
+          searchResult.degraded = true;
+          searchResult.degradation_reason = "no_matches";
+        }
         const result = attachReceipt({ ...searchResult }, { tool: "search", category: "search", input: toolArgs, output: searchResult });
         rememberReceipt(result);
         return okJson(result);

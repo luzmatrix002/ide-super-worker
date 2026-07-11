@@ -17,6 +17,8 @@ export interface SearchResult {
   count: number;
   truncated: boolean;
   engine: "rg" | "node";
+  degraded?: boolean;
+  degradation_reason?: string;
 }
 
 const SEARCH_TIMEOUT_MS = 5_000;
@@ -56,10 +58,21 @@ function runRg(input: SearchInput, limit: number, mode: "lines" | "files" | "cou
     maxBuffer: rgMaxBuffer()
   });
 
-  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOBUFS") return undefined;
+  const code = (result.error as NodeJS.ErrnoException)?.code;
+  // ENOENT: rg not installed → fall through to git grep / node search.
+  // ENOBUFS: maxBuffer exceeded → fall through (output too large for rg).
+  // ETIMEDOUT: rg killed after SEARCH_TIMEOUT_MS → fall through to next engine
+  //   instead of throwing, so the fallback chain in searchWorkspace can try
+  //   git grep and node search.  Previously this threw, which prevented any
+  //   fallback and inflated the search error rate.
+  if (code === "ENOENT" || code === "ENOBUFS" || code === "ETIMEDOUT") return undefined;
   if (result.error) throw new Error(`search failed: ${result.error.message}`);
   if (result.status !== 0 && result.status !== 1) {
+    const stderr = (result.stderr || "").toLowerCase();
+    // rg uses Rust regex which doesn't support look-around (lookahead/lookbehind).
+    // JavaScript RegExp does support these, so fall through to git grep / node
+    // search instead of throwing and relying on the outer try-catch.
+    if (result.status === 2 && stderr.includes("regex parse error")) return undefined;
     throw new Error(`search failed: ${(result.stderr || result.stdout || `rg exited ${result.status}`).slice(0, 500)}`);
   }
 
@@ -79,7 +92,11 @@ function runGitGrep(input: SearchInput, limit: number, mode: "lines" | "files" |
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024
   });
-  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+  // ENOENT: git not installed → fall through to node search.
+  // ETIMEDOUT: git grep killed after timeout → fall through to node search.
+  // Any other spawn error also falls through rather than throwing.
+  const gitCode = (result.error as NodeJS.ErrnoException)?.code;
+  if (gitCode === "ENOENT" || gitCode === "ETIMEDOUT" || result.error) return undefined;
   if (result.status !== 0 && result.status !== 1) return undefined;
   const lines = (result.stdout || "").split(/\r?\n/).filter(Boolean).map(trimLine);
   const sliced = lines.slice(0, limit);
@@ -138,7 +155,23 @@ function relativeDisplay(file: string, roots: string[]): string {
 }
 
 function runNodeSearch(input: SearchInput, limit: number, mode: "lines" | "files" | "count"): SearchResult {
-  const re = new RegExp(input.pattern, "u");
+  // Defence-in-depth: even though searchWorkspace pre-validates the regex,
+  // handle invalid patterns here too in case runNodeSearch is ever called
+  // directly or the pre-validation is bypassed.
+  let re: RegExp;
+  try {
+    re = new RegExp(input.pattern, "u");
+  } catch (e) {
+    return {
+      mode,
+      results: [],
+      count: 0,
+      truncated: false,
+      engine: "node",
+      degraded: true,
+      degradation_reason: `invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`
+    };
+  }
   const files: string[] = [];
   const roots = input.dirs.map((dir) => path.resolve(dir));
   for (const root of roots) collectFiles(root, files);
@@ -146,9 +179,13 @@ function runNodeSearch(input: SearchInput, limit: number, mode: "lines" | "files
   const results: string[] = [];
   let count = 0;
   const deadline = Date.now() + SEARCH_TIMEOUT_MS;
+  let timedOut = false;
 
   for (const file of files.sort((a, b) => a.localeCompare(b))) {
-    if (Date.now() > deadline) throw new Error("search timed out");
+    if (Date.now() > deadline) {
+      timedOut = true;
+      break;
+    }
     const relative = relativeDisplay(file, roots);
     if (!matchesGlob(relative, input.glob)) continue;
 
@@ -181,7 +218,15 @@ function runNodeSearch(input: SearchInput, limit: number, mode: "lines" | "files
   }
 
   const effectiveCount = mode === "lines" ? count : results.length;
-  return { mode, results, count: effectiveCount, truncated: effectiveCount > results.length, engine: "node" };
+  return {
+    mode,
+    results,
+    count: effectiveCount,
+    truncated: effectiveCount > results.length,
+    engine: "node",
+    degraded: timedOut,
+    degradation_reason: timedOut ? "search_timed_out" : undefined
+  };
 }
 
 export function searchWorkspace(input: SearchInput): SearchResult {
@@ -189,5 +234,88 @@ export function searchWorkspace(input: SearchInput): SearchResult {
   if (!input.dirs.length) throw new Error("dirs is required");
   const limit = maxResults(input.max_results);
   const mode = normalizeMode(input.mode);
-  return runRg(input, limit, mode) ?? runGitGrep(input, limit, mode) ?? runNodeSearch(input, limit, mode);
+
+  // Pre-validate the regex pattern with JavaScript's RegExp engine.  If the
+  // pattern is invalid here, rg / git grep / node search will all fail on it
+  // too, so return a degraded result early instead of wasting timeout budget
+  // on three failing engines and ultimately throwing.
+  try {
+    new RegExp(input.pattern, "u");
+  } catch (e) {
+    return {
+      mode,
+      results: [],
+      count: 0,
+      truncated: false,
+      engine: "node",
+      degraded: true,
+      degradation_reason: `invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`
+    };
+  }
+
+  // P0-A: Precheck dir existence. Non-existent dirs are filtered out before
+  // invoking any search engine, so we don't waste timeout budget on three
+  // failing fallbacks. If ALL dirs are missing, return a degraded empty result
+  // instead of throwing — the caller can distinguish "no matches" from
+  // "path problem" via the degraded flag.
+  const existingDirs: string[] = [];
+  const missingDirs: string[] = [];
+  for (const dir of input.dirs) {
+    try {
+      const stat = fs.statSync(dir);
+      if (stat.isDirectory() || stat.isFile()) {
+        existingDirs.push(dir);
+      } else {
+        missingDirs.push(dir);
+      }
+    } catch {
+      missingDirs.push(dir);
+    }
+  }
+  if (existingDirs.length === 0) {
+    return {
+      mode,
+      results: [],
+      count: 0,
+      truncated: false,
+      engine: "node",
+      degraded: true,
+      degradation_reason: `all search dirs missing or inaccessible: ${missingDirs.join(", ")}`
+    };
+  }
+  const filteredInput = existingDirs.length < input.dirs.length ? { ...input, dirs: existingDirs } : input;
+  // Defence-in-depth: wrap each engine in try-catch so that ANY unexpected
+  // error from one engine falls through to the next instead of aborting the
+  // entire search.  The last engine (node search) may still throw — that is
+  // correct because there is no further fallback.
+  try {
+    const rgResult = runRg(filteredInput, limit, mode);
+    if (rgResult) return rgResult;
+  } catch {
+    // Fall through to git grep.
+  }
+  try {
+    const gitResult = runGitGrep(filteredInput, limit, mode);
+    if (gitResult) return gitResult;
+  } catch {
+    // Fall through to node search.
+  }
+  // Defence-in-depth: wrap the final engine in try-catch as the ultimate
+  // safety net.  runNodeSearch already handles regex errors and timeouts
+  // gracefully, but any unexpected error (e.g. permission denied on a
+  // deeply nested directory, EACCES on statSync) should still produce a
+  // degraded result instead of propagating to the caller as a hard error.
+  try {
+    return runNodeSearch(filteredInput, limit, mode);
+  } catch (error) {
+    return {
+      mode,
+      results: [],
+      count: 0,
+      truncated: false,
+      engine: "node",
+      degraded: true,
+      degradation_reason: `node_search_failed: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
 }

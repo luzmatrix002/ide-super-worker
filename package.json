@@ -1,6 +1,6 @@
 {
   "name": "ide-super-worker",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,7 @@
     "stats": "node scripts/stats.mjs",
     "stats:gate": "node scripts/stats.mjs --gate --since-minutes=60",
     "smoke": "npm run build && node dist/smoke_test.js",
-    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js"
+    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js && node dist/tests/fanout.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

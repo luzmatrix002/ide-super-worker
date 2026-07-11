@@ -180,7 +180,11 @@ function immediateCircuitClasses(): Set<ToolErrorClass> {
 }
 
 function circuitEarlyCloseMs(): number {
-  return boundedIntegerEnv("WORKER_TOOL_CIRCUIT_EARLY_CLOSE_MS", 30_000, 0, 60 * 60 * 1000);
+  // P2: Default raised from 30s to 120s to reduce circuit flapping. A single
+  // successful call after 30s is not strong evidence of recovery for
+  // intermittent failures (e.g. gateway rate-limiting). 120s gives the
+  // downstream more time to stabilise before we close the circuit.
+  return boundedIntegerEnv("WORKER_TOOL_CIRCUIT_EARLY_CLOSE_MS", 120_000, 0, 60 * 60 * 1000);
 }
 
 function circuitStateEventMax(): number {
@@ -720,6 +724,11 @@ export function reviewToolErrorRates(options: { metricsFile?: string; now?: Date
         continue;
       }
       if (row.event !== "tool_call") continue;
+      // Skip internal fan-out rows (branch/coordinator/reviewer) — they are
+      // implementation details, not user-facing tool calls. Newer code uses
+      // event: "fanout_internal" instead, but older rows may still use
+      // event: "tool_call" with a role field.
+      if (row.role) continue;
       if (sinceMs !== undefined) {
         const ts = Date.parse(String(row.ts || ""));
         if (!Number.isFinite(ts) || ts < sinceMs) continue;

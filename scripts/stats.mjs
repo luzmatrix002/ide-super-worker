@@ -181,6 +181,12 @@ for (const metricFile of metricFiles) {
     }
     rows += 1;
     if (row.event === "tool_call") {
+      // Defense-in-depth: skip internal fan-out rows that carry a `role`
+      // field (branch/coordinator/reviewer). These are implementation
+      // details of fan-out, not user-facing tool calls. Newer code uses
+      // event: "fanout_internal" instead, but older rows may still use
+      // event: "tool_call" with a role field.
+      if (row.role) continue;
       const receipt = receiptFrom(row);
       if (receipt) {
         const category = String(receipt.category || row.category || "unknown");
@@ -224,6 +230,9 @@ for (const metricFile of metricFiles) {
       });
       continue;
     }
+    // Skip internal fan-out metrics — they are not user-facing tool calls
+    // and should not be counted as upstream gateway calls either.
+    if (row.event === "fanout_internal") continue;
     if (inferLegacyAudit) {
       const inferred = legacyAudit(row);
       if (inferred) recordToolAudit(inferred);

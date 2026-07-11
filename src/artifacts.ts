@@ -35,13 +35,22 @@ export function saveArtifact(kind: string, content: unknown): { artifact_ref: st
   const text = typeof content === "string" ? content : JSON.stringify(content, null, 2);
   const safe = redactSecrets(text || "");
   if (!safe) return undefined;
-  const id = crypto.randomUUID();
-  const ref = `${ARTIFACT_REF_PREFIX}${id}`;
-  const file = path.join(artifactDir(), `${id}.txt`);
-  fs.writeFileSync(file, safe, "utf8");
-  const bytes = Buffer.byteLength(safe, "utf8");
-  artifacts.set(ref, { file, bytes, kind });
-  return { artifact_ref: ref, bytes };
+  try {
+    const id = crypto.randomUUID();
+    const ref = `${ARTIFACT_REF_PREFIX}${id}`;
+    const file = path.join(artifactDir(), `${id}.txt`);
+    fs.writeFileSync(file, safe, "utf8");
+    const bytes = Buffer.byteLength(safe, "utf8");
+    artifacts.set(ref, { file, bytes, kind });
+    return { artifact_ref: ref, bytes };
+  } catch {
+    // Artifact persistence is best-effort. If the file system is unavailable
+    // (disk full, permission denied, etc.), return undefined so the caller
+    // continues without an artifact_ref rather than failing the entire tool
+    // call.  The receipt will still record output_bytes, allowing downstream
+    // audits to detect the missing artifact.
+    return undefined;
+  }
 }
 
 export function createReceipt(args: {

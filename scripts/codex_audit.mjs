@@ -98,8 +98,12 @@ if (failures.length === 0) {
   rows = readRows(metricsFile, Date.now() - sinceMinutes * 60_000);
 }
 
-const toolRows = rows.filter((row) => row.event === "tool_call");
-const upstreamRows = rows.filter((row) => row.event !== "tool_call");
+// Filter out internal fan-out rows (branch/coordinator/reviewer) that carry
+// a `role` field. These are implementation details, not user-facing tool calls.
+// Newer code uses event: "fanout_internal" instead, but older rows may still
+// use event: "tool_call" with a role field.
+const toolRows = rows.filter((row) => row.event === "tool_call" && !row.role);
+const upstreamRows = rows.filter((row) => row.event !== "tool_call" && row.event !== "fanout_internal");
 const workerToolRows = toolRows.filter((row) => row.route === "worker");
 const mainToolRows = toolRows.filter((row) => row.route === "main");
 const fallbackRows = upstreamRows.filter((row) => row.route === "fallback");
