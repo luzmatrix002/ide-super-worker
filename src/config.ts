@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
+import * as os from "node:os";
 import * as path from "node:path";
 
 export const DEFAULT_MODEL = "Qwen3.6-35B-A3B-APEX-I-Compact.gguf";
@@ -72,6 +74,24 @@ export const WAIT_DEFAULT_MS = readIntegerEnv("WAIT_DEFAULT_MS", 30 * 60 * 1000,
 export const WAIT_MAX_MS = readIntegerEnv("WAIT_MAX_MS", 6 * 60 * 60 * 1000, 1_000, 24 * 60 * 60 * 1000);
 export const MAX_RUNNING_JOBS = readIntegerEnv("MAX_RUNNING_JOBS", 4, 1, 100);
 export const MAX_STORED_JOBS = readIntegerEnv("MAX_STORED_JOBS", 100, 10, 10000);
+const coordinationNamespace = createHash("sha256")
+  .update(`${os.hostname()}\0${os.userInfo().username}`)
+  .digest("hex")
+  .slice(0, 16);
+export const GLOBAL_COORDINATION_DIR = path.resolve(
+  process.env.WORKER_GLOBAL_COORDINATION_DIR ||
+    path.join(os.tmpdir(), "ide-super-worker-coordination", coordinationNamespace)
+);
+export const GLOBAL_HEAVY_MAX = readIntegerEnv("WORKER_GLOBAL_HEAVY_MAX", 1, 1, 16);
+export const GLOBAL_HEAVY_QUEUE_MAX = readIntegerEnv("WORKER_GLOBAL_HEAVY_QUEUE_MAX", 8, 1, 1000);
+export const GLOBAL_LITE_MAX = readIntegerEnv("WORKER_GLOBAL_LITE_MAX", 1, 1, 32);
+export const GLOBAL_LITE_QUEUE_MAX = readIntegerEnv("WORKER_GLOBAL_LITE_QUEUE_MAX", 12, 1, 1000);
+export const GLOBAL_ACQUIRE_TIMEOUT_MS = readIntegerEnv(
+  "WORKER_GLOBAL_ACQUIRE_TIMEOUT_MS",
+  10 * 60 * 1000,
+  1_000,
+  60 * 60 * 1000
+);
 // --- Fan-out Coordinator (2.6.1) ---
 // WORKER_FANOUT_ENABLED: gate the entire fan-out feature. Default off; pilot
 //   callers must explicitly opt in.

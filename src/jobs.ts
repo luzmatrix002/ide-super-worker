@@ -197,6 +197,10 @@ export function setTerminalStatus(
   job.ended_at = new Date().toISOString();
   job.exit_code = details.exitCode;
   job.signal = details.signal;
+  job.resourceAbort?.abort();
+  job.resourceAbort = undefined;
+  job.resourceRelease?.();
+  job.resourceRelease = undefined;
 
   if (status === "cancelled") {
     job.outcome = createCancelledOutcome(job.outcome);
@@ -231,6 +235,7 @@ export function setTerminalStatus(
     removeWorktree({ repo: job.worktreeRepo, path: job.worktreePath, branch: job.worktreeBranch });
     job.worktreePath = undefined;
   }
+
 
   scheduleJobCleanup(jobId, job);
   pruneStoredJobs();

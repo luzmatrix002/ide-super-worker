@@ -277,12 +277,19 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | Variable | Purpose |
 | --- | --- |
 | `SANDBOX_ROOT` | Root directory allowed for worker jobs and `analyze` file reads. |
+| `WORKER_ALLOW_FILESYSTEM_ROOT` | Emergency override. Set `1` to permit jobs/searches at a drive root; disabled by default to prevent accidental whole-disk scans. |
 | `ONEAPI_BASE_URL` / `ANTHROPIC_BASE_URL` | Primary gateway URL. |
 | `ONEAPI_API_KEY` / `ANTHROPIC_API_KEY` | Primary gateway key. Keep it out of git. |
 | `CLAUDE_MODEL` / `ANTHROPIC_MODEL` | Real backend model used by the gateway. |
 | `CLAUDE_CODE_MODEL` | Model name passed to Claude Code for local validation, usually `sonnet`. |
 | `USE_OPENAI_ADAPTER` | `1` to use the local Anthropic-to-OpenAI adapter. |
-| `MAX_RUNNING_JOBS` | Worker concurrency limit, default `4`, clamped to `1-100`. |
+| `MAX_RUNNING_JOBS` | Per-MCP secondary limit for accepted heavy jobs, default `4`, clamped to `1-100`. |
+| `WORKER_GLOBAL_COORDINATION_DIR` | Shared machine-local FIFO state directory. Defaults to a per-user namespace under the OS temp directory. All MCP instances that should share limits must use the same value. |
+| `WORKER_GLOBAL_HEAVY_MAX` | Machine-global active `start` job limit, default `1`. |
+| `WORKER_GLOBAL_HEAVY_QUEUE_MAX` | Machine-global waiting `start` job limit, default `8`; excess jobs fail with a retryable busy error. |
+| `WORKER_GLOBAL_LITE_MAX` | Machine-global active gateway-call limit for analyze/review/semantic/fan-out work, default `1`. |
+| `WORKER_GLOBAL_LITE_QUEUE_MAX` | Machine-global waiting lite-call limit, default `12`; excess calls fail with a retryable busy error. |
+| `WORKER_GLOBAL_ACQUIRE_TIMEOUT_MS` | Maximum wait for a global Heavy or Lite slot, default `600000` ms. |
 | `DIFF_MAX_BYTES` | Maximum returned diff size. |
 | `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
 | `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |

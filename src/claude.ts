@@ -138,7 +138,14 @@ export function buildClaudeLaunchPlan(input: StartJobInput, additionalDirs: stri
   };
 
   if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl;
-  if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+  if (apiKey) {
+    if (baseUrl && !allowOfficialAnthropic()) {
+      env.ANTHROPIC_AUTH_TOKEN ||= apiKey;
+      delete env.ANTHROPIC_API_KEY;
+    } else {
+      env.ANTHROPIC_API_KEY = apiKey;
+    }
+  }
   delete env.ONEAPI_API_KEY;
 
   return { command, args, env, model, cliModel };

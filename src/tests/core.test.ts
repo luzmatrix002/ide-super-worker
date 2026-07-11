@@ -37,6 +37,23 @@ const reliability = await import("../reliability.js");
 const toolErrorControl = await import("../tool_error_control.js");
 const originalFetch = globalThis.fetch;
 
+const filesystemRoot = path.parse(root).root;
+const rootGuardModule = new URL("../server.js", import.meta.url).href;
+const rootGuardRun = spawnSync(
+  process.execPath,
+  [
+    "--input-type=module",
+    "-e",
+    `import { validateSearchPaths } from ${JSON.stringify(rootGuardModule)}; try { validateSearchPaths([${JSON.stringify(filesystemRoot)}]); process.exit(2); } catch (error) { console.log(error.message); }`
+  ],
+  {
+    encoding: "utf8",
+    env: { ...process.env, SANDBOX_ROOT: filesystemRoot }
+  }
+);
+assert.equal(rootGuardRun.status, 0, rootGuardRun.stderr);
+assert.match(rootGuardRun.stdout, /filesystem-root searches are disabled/);
+
 function readSourceFiles(dir: string): Array<{ file: string; text: string }> {
   const entries: Array<{ file: string; text: string }> = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -120,6 +137,8 @@ diffJob.result.result = "worker summary";
 diffJob.result.session_id = "session-1";
 diffJob.result.total_cost_usd = 0.01;
 const publicDiffJob = server.publicJob(diffJob);
+assert.equal(server.isWaitErrorResult(publicDiffJob), false);
+assert.equal(server.isWaitErrorResult({ error: "Job not found" }), true);
 assert.equal(publicDiffJob.diff, "");
 assert.equal("result" in publicDiffJob, false);
 assert(publicDiffJob.checks[0].includes("response output truncated"));
@@ -1260,7 +1279,8 @@ assert.equal(plan.model, "gateway-model");
 assert.equal(plan.cliModel, "sonnet");
 assert.equal(plan.env.ANTHROPIC_MODEL, "sonnet");
 assert.equal(plan.env.CLAUDE_MODEL, "gateway-model");
-assert.equal(plan.env.ANTHROPIC_API_KEY, "unit-test-api-key");
+assert.equal(plan.env.ANTHROPIC_API_KEY, undefined);
+assert.equal(plan.env.ANTHROPIC_AUTH_TOKEN, "unit-test-api-key");
 assert.equal(plan.env.ONEAPI_API_KEY, undefined);
 
 assert.throws(

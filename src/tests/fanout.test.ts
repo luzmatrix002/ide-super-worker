@@ -14,6 +14,9 @@ process.env.ONEAPI_BASE_URL = "https://gateway.example.test/v1";
 process.env.ONEAPI_API_KEY = "unit-test-api-key";
 process.env.WORKER_LITE_MODEL = "lite-test-model";
 process.env.WORKER_FANOUT_ENABLED = "1";
+process.env.WORKER_GLOBAL_COORDINATION_DIR = path.join(root, "coordination");
+process.env.WORKER_GLOBAL_LITE_MAX = "3";
+process.env.WORKER_LITE_MAX_CONCURRENCY = "3";
 process.env.WORKER_SEMANTIC_REVIEW_MODEL = "reviewer-test-model";
 // Disable cache to ensure each call hits the mock.
 process.env.WORKER_LITE_CACHE_DIR = "";

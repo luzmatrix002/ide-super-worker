@@ -1,10 +1,26 @@
 import "./env.js"; // must run before any module reads process.env (e.g. config.ts)
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createCodexWorkerServer } from "./server.js";
+import { createCodexWorkerServer, shutdownRunningJobs } from "./server.js";
 import { startToolErrorReviewLoop } from "./tool_error_control.js";
 
 const server = createCodexWorkerServer();
 const transport = new StdioServerTransport();
+let shutdownPromise: Promise<void> | undefined;
+
+function shutdown(): Promise<void> {
+  shutdownPromise ??= shutdownRunningJobs();
+  return shutdownPromise;
+}
+
+transport.onclose = () => {
+  void shutdown();
+};
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void shutdown().finally(() => process.exit(0));
+  });
+}
 
 server
   .connect(transport)

@@ -1,4 +1,14 @@
-import { LITE_MAX_CONCURRENCY, FANOUT_MAX_ACTIVE } from "./config.js";
+import {
+  FANOUT_MAX_ACTIVE,
+  GLOBAL_ACQUIRE_TIMEOUT_MS,
+  GLOBAL_COORDINATION_DIR,
+  GLOBAL_HEAVY_MAX,
+  GLOBAL_HEAVY_QUEUE_MAX,
+  GLOBAL_LITE_MAX,
+  GLOBAL_LITE_QUEUE_MAX,
+  LITE_MAX_CONCURRENCY
+} from "./config.js";
+import { CrossProcessSemaphore, type ConcurrencyTicket } from "./global_concurrency.js";
 
 /**
  * FIFO semaphore that limits concurrent lite-path gateway calls.
@@ -41,11 +51,65 @@ export class FIFOSemaphore {
   }
 }
 
+class LayeredSemaphore {
+  constructor(
+    private readonly local: FIFOSemaphore,
+    private readonly global: CrossProcessSemaphore
+  ) {}
+
+  async acquire(signal?: AbortSignal): Promise<ConcurrencyTicket> {
+    const localTicket = await this.local.acquire();
+    try {
+      const globalTicket = await this.global.acquire(signal);
+      let released = false;
+      return {
+        release: () => {
+          if (released) return;
+          released = true;
+          try {
+            globalTicket.release();
+          } finally {
+            localTicket.release();
+          }
+        }
+      };
+    } catch (error) {
+      localTicket.release();
+      throw error;
+    }
+  }
+
+  get activeCount(): number {
+    return this.local.activeCount;
+  }
+
+  get pendingCount(): number {
+    return this.local.pendingCount;
+  }
+}
+
 /**
  * Singleton semaphore for all lite-path gateway calls.
  * Limits concurrent calls to WORKER_LITE_MAX_CONCURRENCY (default 3).
  */
-export const liteSemaphore = new FIFOSemaphore(LITE_MAX_CONCURRENCY);
+export const liteSemaphore = new LayeredSemaphore(
+  new FIFOSemaphore(LITE_MAX_CONCURRENCY),
+  new CrossProcessSemaphore({
+    root: GLOBAL_COORDINATION_DIR,
+    lane: "lite",
+    maxActive: GLOBAL_LITE_MAX,
+    maxQueue: GLOBAL_LITE_QUEUE_MAX,
+    acquireTimeoutMs: GLOBAL_ACQUIRE_TIMEOUT_MS
+  })
+);
+
+export const heavySemaphore = new CrossProcessSemaphore({
+  root: GLOBAL_COORDINATION_DIR,
+  lane: "heavy",
+  maxActive: GLOBAL_HEAVY_MAX,
+  maxQueue: GLOBAL_HEAVY_QUEUE_MAX,
+  acquireTimeoutMs: GLOBAL_ACQUIRE_TIMEOUT_MS
+});
 
 /**
  * Singleton semaphore for concurrent fan-out operations.

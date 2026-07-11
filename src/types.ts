@@ -171,6 +171,8 @@ export interface JobState {
   stderrRemainder: string;
   result: JobResult;
   cleanupTimer?: NodeJS.Timeout;
+  resourceAbort?: AbortController;
+  resourceRelease?: () => void;
   // --- reasoning / auto-revise loop state ---
   originalPrompt: string;
   additionalDirs: string[];

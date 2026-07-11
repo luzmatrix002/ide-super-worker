@@ -42,6 +42,12 @@ export function validatePath(targetPath: string): string {
   if (!isInsideDirectory(realPath, SANDBOX_ROOT)) {
     throw new Error(`[Security] Directory escapes SANDBOX_ROOT: ${absolutePath} (real: ${realPath})`);
   }
+  if (
+    path.resolve(realPath) === path.parse(realPath).root &&
+    process.env.WORKER_ALLOW_FILESYSTEM_ROOT !== "1"
+  ) {
+    throw new Error("[Security] filesystem-root jobs are disabled; choose a project directory");
+  }
 
   return realPath;
 }

@@ -33,6 +33,7 @@ import {
 } from "./fanout.js";
 import { buildClaudeLaunchPlan, type ClaudeLaunchPlan } from "./claude.js";
 import { parseCheckCommands, runCheckCommands, type CheckResult } from "./checks.js";
+import { heavySemaphore } from "./concurrency.js";
 import {
   appendLog,
   appendStderrChunk,
@@ -612,7 +613,7 @@ function isRejectableInputError(message: string): boolean {
   );
 }
 
-function validateSearchPaths(value: unknown): string[] {
+export function validateSearchPaths(value: unknown): string[] {
   const rawPaths = Array.isArray(value) && value.length ? value.map(String) : [SANDBOX_ROOT];
   const validated = rawPaths.map((item) => {
     if (!item.trim()) throw new Error("[Security] search dirs must contain non-empty paths");
@@ -630,6 +631,9 @@ function validateSearchPaths(value: unknown): string[] {
     }
     if (!isInsideDirectory(real, SANDBOX_ROOT)) {
       throw new Error(`[Security] search path escapes SANDBOX_ROOT: ${absolute} (real: ${real})`);
+    }
+    if (path.resolve(real) === path.parse(real).root && process.env.WORKER_ALLOW_FILESYSTEM_ROOT !== "1") {
+      throw new Error("[Security] filesystem-root searches are disabled; pass an absolute project path");
     }
     return real;
   });
@@ -809,7 +813,10 @@ async function buildLaunchPlan(input: StartJobInput, additionalDirs: string[]): 
   const launch = buildClaudeLaunchPlan(input, additionalDirs);
   if (shouldUseOpenAIAdapter()) {
     const adapter = await ensureAnthropicOpenAIAdapter(launch.model);
+    const localAdapterToken = "sk-ant-api03-local-adapter";
     launch.env.ANTHROPIC_BASE_URL = adapter.baseUrl;
+    launch.env.ANTHROPIC_AUTH_TOKEN = localAdapterToken;
+    delete launch.env.ANTHROPIC_API_KEY;
     launch.env.ANTHROPIC_MODEL = launch.cliModel;
     launch.env.CLAUDE_MODEL = launch.model;
     launch.args.splice(
@@ -819,6 +826,7 @@ async function buildLaunchPlan(input: StartJobInput, additionalDirs: string[]): 
       JSON.stringify({
         env: {
           ANTHROPIC_BASE_URL: adapter.baseUrl,
+          ANTHROPIC_AUTH_TOKEN: localAdapterToken,
           ANTHROPIC_MODEL: launch.cliModel,
           ANTHROPIC_DEFAULT_SONNET_MODEL: launch.cliModel,
           ANTHROPIC_DEFAULT_HAIKU_MODEL: launch.cliModel,
@@ -1240,7 +1248,7 @@ function registerProcessHandlers(jobId: string, job: JobState, child: ReturnType
   });
 
   child.once("close", (code, signal) => {
-    if (job.status === "cancelled") return;
+    if (isTerminalStatus(job.status)) return;
     onClaudeClose(jobId, job, code, signal).catch((error: any) => {
       setTerminalStatus(jobId, job, "failed", {
         exitCode: code,
@@ -1263,7 +1271,7 @@ async function startJob(args: Record<string, unknown>) {
     input.scoped_patch = { paths: scopedPatch.relativePaths, max_diff_bytes: scopedPatch.maxDiffBytes };
   }
 
-  const launch = await buildLaunchPlan(input, additionalDirs);
+  const launch = buildClaudeLaunchPlan(input, additionalDirs);
 
   const reasoningEnabled = input.reasoning ?? REASONING_ENABLED;
   const autoReviseEnabled = (input.auto_revise ?? AUTO_REVISE_ENABLED) && reasoningEnabled;
@@ -1339,24 +1347,39 @@ async function startJob(args: Record<string, unknown>) {
   if (input.stages?.length) {
     appendLog(job, `[start] stages=${input.stages.length}, current=1/${input.stages.length}`);
   }
-  if (shouldUseOpenAIAdapter()) {
-    appendLog(job, `[start] using local Anthropic->OpenAI adapter at ${launch.env.ANTHROPIC_BASE_URL}`);
-  }
   if (scopedPatch?.relativePaths.length) {
     appendLog(job, `[start] scoped_patch=${scopedPatch.relativePaths.join(", ")}`);
   }
 
-  if (!spawnClaude(jobId, job, launch)) {
-    const legacyPayload = { job_id: jobId, status: job.status, error: job.result.error };
-    const payload = attachReceipt(legacyPayload, {
-      tool: "start",
-      category: "implementation",
-      input: args,
-      output: legacyPayload,
-      status: "error"
+  const resourceAbort = new AbortController();
+  job.resourceAbort = resourceAbort;
+  const queuedAt = Date.now();
+  appendLog(job, "[queue] waiting for the machine-global heavy slot");
+  void heavySemaphore
+    .acquire(resourceAbort.signal)
+    .then(async (ticket) => {
+      job.resourceAbort = undefined;
+      if (isTerminalStatus(job.status)) {
+        ticket.release();
+        return;
+      }
+      job.resourceRelease = ticket.release;
+      appendLog(job, `[queue] acquired machine-global heavy slot after ${Date.now() - queuedAt}ms`);
+      const activeLaunch = await buildLaunchPlan(input, additionalDirs);
+      job.command = activeLaunch.command;
+      job.args = activeLaunch.args;
+      job.model = activeLaunch.model;
+      if (shouldUseOpenAIAdapter()) {
+        appendLog(job, `[start] using local Anthropic->OpenAI adapter at ${activeLaunch.env.ANTHROPIC_BASE_URL}`);
+      }
+      if (isTerminalStatus(job.status)) return;
+      spawnClaude(jobId, job, activeLaunch);
+    })
+    .catch((error: any) => {
+      job.resourceAbort = undefined;
+      if (isTerminalStatus(job.status)) return;
+      setTerminalStatus(jobId, job, "failed", { error: error?.message || String(error) });
     });
-    return okJson({ contract_version: OUTCOME_CONTRACT_VERSION, outcome: job.outcome, ...payload });
-  }
 
   const legacyPayload = {
     job_id: jobId,
@@ -1376,11 +1399,30 @@ async function startJob(args: Record<string, unknown>) {
   return okJson({ contract_version: OUTCOME_CONTRACT_VERSION, outcome: job.outcome, ...payload });
 }
 
+export function isWaitErrorResult(value: unknown): value is { error: string } {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !("contract_version" in value) &&
+      typeof (value as { error?: unknown }).error === "string"
+  );
+}
+
+export async function shutdownRunningJobs(): Promise<void> {
+  const running = [...jobs.entries()].filter(([, job]) => !isTerminalStatus(job.status));
+  await Promise.all(
+    running.map(async ([jobId, job]) => {
+      const pid = job.pid;
+      setTerminalStatus(jobId, job, "cancelled");
+      await killProcessTree(pid);
+    })
+  );
+}
+
 async function waitJob(args: Record<string, unknown>) {
   const jobId = String(args.job_id || "");
   const job = jobs.get(jobId);
   if (!job) return { error: "Job not found" };
-
   const timeoutMs = parseWaitTimeout(args.timeout_ms);
   const deadline = Date.now() + timeoutMs;
 
@@ -1834,7 +1876,8 @@ export function createCodexWorkerServer(): Server {
       }
 
       if (name === "get") {
-        const job = jobs.get(String(toolArgs.job_id || ""));
+        const jobId = String(toolArgs.job_id || "");
+        const job = jobs.get(jobId);
         if (!job) {
           return reject(
             "get",
@@ -1856,7 +1899,8 @@ export function createCodexWorkerServer(): Server {
       }
 
       if (name === "tail") {
-        const job = jobs.get(String(toolArgs.job_id || ""));
+        const jobId = String(toolArgs.job_id || "");
+        const job = jobs.get(jobId);
         if (!job) {
           return reject(
             "tail",
@@ -1872,7 +1916,7 @@ export function createCodexWorkerServer(): Server {
 
       if (name === "wait") {
         const result = await waitJob(toolArgs);
-        if ("error" in result) {
+        if (isWaitErrorResult(result)) {
           const error = String(result.error);
           const stillRunning = /still running/i.test(error);
           const runningJob = stillRunning ? jobs.get(String(toolArgs.job_id || "")) : undefined;
@@ -2120,7 +2164,8 @@ export function createCodexWorkerServer(): Server {
       }
 
       if (name === "cancel") {
-        const job = jobs.get(String(toolArgs.job_id || ""));
+        const jobId = String(toolArgs.job_id || "");
+        const job = jobs.get(jobId);
         if (!job) {
           return reject(
             "cancel",
@@ -2135,8 +2180,9 @@ export function createCodexWorkerServer(): Server {
           rememberReceipt(result);
           return okJson(result);
         }
-        await killProcessTree(job.pid);
+        const pid = job.pid;
         setTerminalStatus(String(toolArgs.job_id), job, "cancelled");
+        await killProcessTree(pid);
         const result = publicJob(job, undefined, false, "cancel");
         rememberReceipt(result);
         return okJson(result);
