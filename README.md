@@ -91,10 +91,10 @@ This project gives you the missing plumbing:
 ## Highlights
 
 - Async MCP tools: `start`, `get`, `tail`, `wait`, `cancel`.
-- Read-only lite tools: `read_pack`, `analyze`, `diff_digest`, `history`, and `draft` keep bulky reading/review/drafting out of the premium thread.
+- Read-only lite tools: `read_pack`, `analyze`, `diff_digest`, `history`, and `draft` keep bulky reading/review/drafting out of the premium thread. `read_pack` keeps its inline payload at or below 16 KB; when not all slices fit, `truncated:true` signals that the complete pack is available through `receipt.artifact_refs`.
 - Code review lite tool: `review` checks diffs/files through the cheap gateway.
 - Zero-LLM repo discovery and mechanical work: `search` uses bounded local search, and `apply_edits` handles deterministic replacements without a model call.
-- Worker-side command digesting: `shell` can run tests/builds/lint and return a compact failure digest. Non-zero command exits return `status:"failed"` or `status:"timeout"` with `failure_kind` and `required_action`; they are command outcomes, not tool transport errors.
+- Worker-side command digesting: `shell` can run tests/builds/lint and return a compact failure digest. Test and typecheck exits return public `status:"failed"` with canonical `failure`, `failure_kind`, and `required_action`, while their receipt/metric remains `ok`; timeouts, missing commands, permission failures, and other infrastructure failures remain tool errors.
 - Receipt abnormal-output assessment: every receipt carries a deterministic accept/repair verdict and bounded repair guidance without default multi-model voting.
 - Runtime tool containment: the worker classifies tool errors, opens per-tool/per-error-class circuits, intercepts unhealthy routes, and uses deterministic fallbacks for `review`/`analyze` when the LLM route is unhealthy.
 - Reliability tiers and episode summaries: `start` can record `lite`, `standard`, `strict`, or `critical` expectations without blocking old callers; hard rejection happens only with `blocking_policy:"enforce"`.
@@ -128,14 +128,14 @@ Use it when you want Codex to stay sharp instead of stuffed:
 | --- | --- |
 | `start` | Start an async Claude Code job in an allowed directory. Supports optional sequential `stages`. |
 | `get` | Read current job lifecycle plus authoritative `outcome`; pass `verbose:true` for the full legacy payload. |
-| `get_artifact_slice` | Read a bounded redacted slice from an artifact referenced by a worker receipt. |
+| `get_artifact_slice` | Read a bounded redacted slice from an artifact referenced by a worker receipt. Artifact refs are process-local and may expire after an MCP worker restart. |
 | `tail` | Read recent worker logs. |
 | `wait` | Wait for completion without killing the job on poll timeout; a poll timeout keeps `outcome.status="running"`. |
 | `cancel` | Kill a running job process tree. |
 | `analyze` | Read-only cheap-model analysis for selected files or bounded globs. |
 | `review` | Cheap-model review of a job diff/checks or selected files, returning a structured verdict. |
 | `search` | Zero-LLM bounded repository search using `rg` when available. |
-| `read_pack` | Zero-LLM context packer for selected paths; returns bounded symbol/keyword slices instead of whole files. |
+| `read_pack` | Zero-LLM context packer for selected paths; returns up to 16 KB of ordered symbol/keyword slices and stores the complete pack behind an artifact ref. |
 | `diff_digest` | Summarize current git diff by file, hunk headers, and risk; optionally run cheap red-team review. |
 | `shell` | Run bounded worker-side commands with optional `digest:true` for test/build/lint output. |
 | `apply_edits` | Zero-LLM literal or regex replacements with replacement-count checks. |
@@ -358,7 +358,7 @@ npm run codex:guard
 
 `npm run codex:guard` runs the local Codex audit and then `stats:gate`.
 
-`npm run eval:contracts` validates the EvalSpan v1 importer and paired/pilot fail-closed rules. `npm run eval:fixtures` verifies the frozen 10-task pilot corpus and its SHA-256. Import external usage with `npm run eval:gate -- --import producer.jsonl --out .eval/eval-spans.jsonl`; gate a completed pilot with `npm run eval:gate -- --input .eval/eval-spans.jsonl --mode pilot`. The pilot proves measurement completeness only, not cost savings or quality non-inferiority. The full producer and formal-manifest contract is in [eval/README.md](eval/README.md); run the preregistered 200-400 task gate with `npm run eval:formal -- --input <spans.jsonl> --manifest <manifest.json>`.
+`npm run eval:contracts` validates the EvalSpan v1 importer and paired/pilot fail-closed rules. `npm run eval:fixtures` verifies the frozen 10-task pilot corpus and its SHA-256. Import external usage with `npm run eval:gate -- --import producer.jsonl --out .eval/eval-spans.jsonl`; gate a completed pilot with `npm run eval:gate -- --input .eval/eval-spans.jsonl --mode pilot`. `WORKER_METRICS_FILE` is operational telemetry, not a substitute for the required raw provider export for non-zero worker-model usage; without that provider export, the pilot is incomplete. The pilot proves measurement completeness only, not cost savings or quality non-inferiority. The full producer and formal-manifest contract is in [eval/README.md](eval/README.md); run the preregistered 200-400 task gate with `npm run eval:formal -- --input <spans.jsonl> --manifest <manifest.json>`.
 
 `npm run skills:validate` checks the project-specific `.claude/skills/` library used to preserve project doctrine for cheaper or lower-context worker sessions.
 

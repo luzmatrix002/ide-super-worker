@@ -1,6 +1,6 @@
 {
   "name": "ide-super-worker",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Cost-saving async MCP worker for Codex that runs Claude Code through cheap OpenAI-compatible gateways.",
   "type": "module",
   "main": "dist/index.js",
