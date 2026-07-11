@@ -3,6 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { attachReceipt, saveArtifact } from "./artifacts.js";
 import { CHECK_OUTPUT_RESPONSE_MAX, SANDBOX_ROOT } from "./config.js";
+import {
+  deliverContextPack,
+  type ContextPackFile,
+  type ContextPackPayload
+} from "./evidence_delivery.js";
 import { digestFailure, reviewDirect } from "./lite.js";
 import { killProcessTree } from "./process.js";
 import { redactSecrets } from "./redact.js";
@@ -128,7 +133,7 @@ export function buildContextPack(args: Record<string, unknown>): Record<string, 
   }
 
   const needles = keywords(task);
-  const packed: Array<Record<string, unknown>> = [];
+  const packed: ContextPackFile[] = [];
   let totalBytes = 0;
   let truncated = files.length > maxFiles;
   for (const file of [...new Set(files)].slice(0, maxFiles)) {
@@ -150,7 +155,7 @@ export function buildContextPack(args: Record<string, unknown>): Record<string, 
     });
   }
 
-  const result = {
+  const result: ContextPackPayload = {
     task,
     mode: "zero_llm_symbol_slices",
     files: packed,
@@ -158,15 +163,7 @@ export function buildContextPack(args: Record<string, unknown>): Record<string, 
     packed_bytes: totalBytes,
     truncated
   };
-  const artifact = saveArtifact("read_pack", result);
-  return attachReceipt(result, {
-    tool: "read_pack",
-    category: "context_pack",
-    input: args,
-    output: result,
-    artifactRefs: artifact ? [artifact.artifact_ref] : [],
-    truncated
-  });
+  return deliverContextPack(args, result);
 }
 
 function git(cwd: string, args: string[], maxBuffer = 1024 * 1024): { ok: boolean; stdout: string; stderr: string; status: number | null } {
