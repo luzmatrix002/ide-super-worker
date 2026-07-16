@@ -693,7 +693,31 @@ try {
   process.exit(1);
 }
 
-// ── Test 19: FanoutValidationError is an Error subclass ──────────────────────
+// ── Test 19: queued FIFO acquisition is cancellable ──────────────────────────
+
+try {
+  const { FIFOSemaphore } = await import("../concurrency.js");
+  const sem = new FIFOSemaphore(1);
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await assert.rejects(sem.acquire(preAborted.signal), /cancelled/i);
+  assert.equal(sem.pendingCount, 0, "pre-aborted waiter must never enter the FIFO queue");
+  const held = await sem.acquire();
+  const controller = new AbortController();
+  const queued = sem.acquire(controller.signal);
+  controller.abort();
+  await assert.rejects(queued, /cancelled/i);
+  assert.equal(sem.pendingCount, 0, "cancelled waiter must be removed from the FIFO queue");
+  held.release();
+  const next = await sem.acquire();
+  next.release();
+  console.log("[fanout-test] FIFOSemaphore cancellation ✓");
+} catch (err) {
+  console.error("[fanout-test] FIFOSemaphore cancellation FAILED:", err);
+  process.exit(1);
+}
+
+// ── Test 20: FanoutValidationError is an Error subclass ──────────────────────
 
 try {
   const fanout = await import("../fanout.js");

@@ -50,6 +50,43 @@ assert.equal(
 assert.equal(failureSemantics.assessShellFailure("tool", "timeout", ""), "timeout");
 assert.equal(failureSemantics.assessShellFailure("tool", "failed", "EACCES permission denied"), "permission_denied");
 assert.equal(failureSemantics.assessShellFailure("tool", "failed", "unexpected process crash"), "unknown_failure");
+assert.equal(
+  failureSemantics.assessShellFailure("tool", "failed", "[fail] synthetic gate failure"),
+  "gate_failure",
+  "gate-form [fail] output must route to gate_failure, not test_failure"
+);
+assert.equal(
+  failureSemantics.assessShellFailure("@'\nSelect-Object -First 3\n'@", "failed", "乱码的 CMD 输出"),
+  "shell_mismatch",
+  "PowerShell here-strings with Select-Object must not become unknown_failure in CMD"
+);
+assert.equal(
+  failureSemantics.assessShellFailure(
+    "npm run stats:gate | Select-Object -First 1",
+    "failed",
+    "[fail] overall tool error rate 10.5% must stay below 5%"
+  ),
+  "gate_failure",
+  "a rerouted PowerShell gate failure must retain gate semantics"
+);
+assert.equal(
+  failureSemantics.assessShellFailure("missing-tool", "failed", "'missing-tool' is not recognized as a command"),
+  "missing_command",
+  "plain executable failures must remain missing_command"
+);
+assert.equal(
+  workerTools.shouldAutoReroutePowerShellCommand("@'\nGet-Location\n'@ | Select-Object -First 1"),
+  true,
+  "Select-Object commands classified as shell mismatches must be rerouted to PowerShell"
+);
+assert.equal(
+  failureSemantics.assessShellFailure(
+    "npm run stats:gate -- --since-minutes=15",
+    "failed",
+    "[fail] overall tool error rate 10.5% must stay below 5%"
+  ),
+  "gate_failure"
+);
 
 const testProjection = failureSemantics.buildShellFailureProjection("test_failure");
 assert.equal(testProjection.failure_kind, testProjection.failure.kind);
@@ -57,6 +94,7 @@ assert.equal(testProjection.required_action, testProjection.failure.action);
 assert.equal(testProjection.fallback.action, testProjection.failure.action);
 assert.equal(failureSemantics.shellToolDisposition("failed", "test_failure"), "ok");
 assert.equal(failureSemantics.shellToolDisposition("failed", "typecheck_failure"), "ok");
+assert.equal(failureSemantics.shellToolDisposition("failed", "gate_failure"), "ok");
 assert.equal(failureSemantics.shellToolDisposition("timeout", "timeout"), "error");
 assert.equal(failureSemantics.shellToolDisposition("failed", "missing_command"), "error");
 
@@ -86,6 +124,17 @@ const typecheckResult = (await workerTools.runWorkerShell({
 assert.equal(typecheckResult.failure.kind, "typecheck_failure");
 assert.equal(typecheckResult.receipt.status, "ok");
 assert.equal(server.workerMetricStatusFromPayload(typecheckResult).status, "ok");
+
+const gateResult = (await workerTools.runWorkerShell({
+  cwd: project,
+  command: `"${process.execPath}" -e "console.error('[fail] overall tool error rate 10.5% must stay below 5%'); process.exit(2)" stats:gate`,
+  digest: true,
+  timeout_ms: 30_000
+})) as any;
+assert.equal(gateResult.failure.kind, "gate_failure");
+assert.equal(gateResult.status, "failed");
+assert.equal(gateResult.receipt.status, "ok");
+assert.equal(server.workerMetricStatusFromPayload(gateResult).status, "ok");
 
 const missingResult = (await workerTools.runWorkerShell({
   cwd: project,

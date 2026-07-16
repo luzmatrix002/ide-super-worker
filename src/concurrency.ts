@@ -19,15 +19,43 @@ import { CrossProcessSemaphore, type ConcurrencyTicket } from "./global_concurre
  */
 export class FIFOSemaphore {
   private active = 0;
-  private readonly queue: Array<() => void> = [];
+  private readonly queue: Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+  }> = [];
 
   constructor(private readonly max: number) {}
 
-  async acquire(): Promise<{ release: () => void }> {
+  async acquire(signal?: AbortSignal): Promise<{ release: () => void }> {
+    if (signal?.aborted) throw new Error("Local semaphore acquire cancelled.");
     if (this.active < this.max) {
       this.active += 1;
     } else {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
+      await new Promise<void>((resolve, reject) => {
+        const entry: {
+          resolve: () => void;
+          reject: (error: Error) => void;
+          signal?: AbortSignal;
+          onAbort?: () => void;
+        } = { resolve, reject, signal };
+        if (signal) {
+          let cancelled = false;
+          entry.onAbort = () => {
+            if (cancelled) return;
+            cancelled = true;
+            const index = this.queue.indexOf(entry);
+            if (index >= 0) this.queue.splice(index, 1);
+            reject(new Error("Local semaphore acquire cancelled."));
+          };
+        }
+        this.queue.push(entry);
+        if (signal && entry.onAbort) {
+          signal.addEventListener("abort", entry.onAbort, { once: true });
+          if (signal.aborted) entry.onAbort();
+        }
+      });
       this.active += 1;
     }
     let released = false;
@@ -37,7 +65,10 @@ export class FIFOSemaphore {
         released = true;
         this.active = Math.max(0, this.active - 1);
         const next = this.queue.shift();
-        if (next) next();
+        if (next) {
+          if (next.signal && next.onAbort) next.signal.removeEventListener("abort", next.onAbort);
+          next.resolve();
+        }
       }
     };
   }
@@ -58,7 +89,7 @@ class LayeredSemaphore {
   ) {}
 
   async acquire(signal?: AbortSignal): Promise<ConcurrencyTicket> {
-    const localTicket = await this.local.acquire();
+    const localTicket = await this.local.acquire(signal);
     try {
       const globalTicket = await this.global.acquire(signal);
       let released = false;

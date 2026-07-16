@@ -71,3 +71,33 @@ npm run eval:formal -- --input .eval/formal/eval-spans.jsonl --manifest .eval/fo
 ```
 
 The command uses the registered 50% premium-token, 30% total-cost, one-sided 95% non-inferiority (`>= -5pp`), zero routed-only-critical, 10,000 paired-bootstrap resamples with seed `20260710`, McNemar exact diagnostic, and 80% power gates. Exit codes are: `0` passed, `2` failed/invalid, `3` add 50 tasks, and `4` inconclusive at 400 tasks. Until this gate passes, keep routing shadow/explicit-only and do not claim cost reduction without quality loss.
+
+The JSON summary also reports additive diagnostic evidence under
+`metrics.quality.by_category`, including pass rates, paired delta, one-sided
+95% lower/upper bounds, and discordant counts for every registered category.
+These category fields expose localized regressions such as
+`analyze_diagnosis` or `review` being masked by the overall result. They do
+not change the preregistered overall gate or authorize a category-level routing
+claim unless that category decision rule and sample size were preregistered.
+
+## Quality-first qualification
+
+The additive quality program is separate from the economic/non-inferiority gate.
+It evaluates Trial A (thinking), Trial B (heterogeneous fan-out), then Trial C
+(the complete production path) for `analyze_diagnosis` and `review` independently.
+Input is versioned `QualityEvalPairV1` JSONL and is evaluated with:
+
+```text
+npm run eval:quality -- --input .eval/quality/pairs.jsonl
+```
+
+Only the preregistered 200-pair/category look (alpha 0.01) and optional
+500-pair/category look (alpha 0.015) are accepted. Bootstrap draws resample whole
+repositories. A candidate-only critical defect fails immediately; otherwise both
+category lower bounds must be greater than zero before the next trial is eligible.
+Each category must preserve the 70/30 real-edge mix. Every row declares blind
+evaluation plus frozen baseline/candidate model-provider-thinking configuration
+fingerprints; mixed fingerprints invalidate the trial.
+Exit codes are `0` passed, `2` failed/invalid, and `4` inconclusive. The importer
+cannot prove task freezing, evaluator blindness, provider identity, or retained
+evidence; the producer must preserve those controls.

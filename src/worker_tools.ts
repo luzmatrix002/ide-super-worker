@@ -295,7 +295,7 @@ function looksDestructive(command: string): boolean {
 export function shouldAutoReroutePowerShellCommand(command: string): boolean {
   if (process.platform !== "win32") return false;
   if (/^\s*(?:powershell|pwsh)(?:\.exe)?\b/i.test(command)) return false;
-  return /\b(Get-Content|ForEach-Object|Write-Output|Remove-Item|Set-Location|Select-String|Get-ChildItem)\b|\$[A-Za-z_][A-Za-z0-9_]*/.test(command);
+  return /\b(Get-Content|ForEach-Object|Write-Output|Remove-Item|Set-Location|Select-Object|Select-String|Get-ChildItem)\b|\$[A-Za-z_][A-Za-z0-9_]*/.test(command);
 }
 
 export function powershellRerouteCommand(command: string): string {
@@ -374,6 +374,8 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
           ].join("\n");
   }
 
+  const commandStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
+  const failureKind = assessShellFailure(command, commandStatus, commandResult.output);
   const output = truncateBytes(commandResult.output, COMMAND_OUTPUT_MAX, "command output");
   const digestRequested = args.digest === true || commandResult.timedOut || commandResult.code !== 0;
   let digest: string | undefined;
@@ -408,8 +410,6 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     digestRequested || outputBytes > responseOutputBytes || outputBytes > RECEIPT_ARTIFACT_MIN_BYTES
       ? saveArtifact("shell", output)
       : undefined;
-  const commandStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
-  const failureKind = assessShellFailure(command, commandStatus, output);
   const result = {
     cwd,
     command,

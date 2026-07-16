@@ -28,11 +28,11 @@ const FILE_MAX_BYTES = 200_000;
 const ANALYZE_GLOB_MAX_FILES = 20;
 const ANALYZE_GLOB_MAX_BYTES = FILE_MAX_BYTES * 2;
 
-interface LiteTarget {
+export interface LiteCompletionTarget {
   baseUrl: string;
   apiKey?: string;
   model: string;
-  label: "primary" | "fallback";
+  label: string;
 }
 
 interface LiteRequest {
@@ -40,8 +40,38 @@ interface LiteRequest {
   messages: Array<{ role: string; content: string }>;
 }
 
-function liteTargets(): LiteTarget[] {
-  const targets: LiteTarget[] = [];
+export interface LiteCompletionOptions {
+  signal?: AbortSignal;
+  bypassCache?: boolean;
+  target?: LiteCompletionTarget;
+  thinking?: boolean;
+  requireThinking?: boolean;
+  contractVersion?: string;
+  role?: string;
+}
+
+export interface LiteCompletionResult {
+  content: string;
+  model: string;
+  route: string;
+  finishReason?: string;
+  thinkingRequested: boolean;
+  thinkingObserved: boolean;
+  reasoningTokens: number | null;
+}
+
+export class LiteCompletionError extends Error {
+  constructor(
+    public readonly code: "output_truncated" | "empty_answer" | "thinking_not_observed" | "model_mismatch",
+    message: string
+  ) {
+    super(message);
+    this.name = "LiteCompletionError";
+  }
+}
+
+function liteTargets(): LiteCompletionTarget[] {
+  const targets: LiteCompletionTarget[] = [];
   const model = LITE_MODEL || getModelName();
   const primaryBase = getGatewayBaseUrl();
   if (primaryBase) {
@@ -163,50 +193,122 @@ export function expandFiles(files: string[]): string[] {
   return unique;
 }
 
-function cacheKey(tool: string, content: string): string {
-  return createHash("sha256").update(`${tool}:${content}`).digest("hex").slice(0, 32);
+function cacheKey(tool: string, fingerprint: string): string {
+  return createHash("sha256").update(`${tool}:${fingerprint}`).digest("hex").slice(0, 32);
 }
 
-function readCachedAnswer(tool: string, content: string): string | undefined {
+function readCachedAnswer(tool: string, fingerprint: string, startedAt: number): string | undefined {
   const dir = liteCacheDir();
   if (!dir || LITE_CACHE_TTL_MS <= 0) return undefined;
-  const key = cacheKey(tool, content);
+  const key = cacheKey(tool, fingerprint);
   const file = path.join(dir, `${key}.json`);
   try {
     const cached = JSON.parse(fs.readFileSync(file, "utf8"));
     if (Date.now() - Number(cached.ts) > LITE_CACHE_TTL_MS || typeof cached.answer !== "string") return undefined;
-    appendMetrics({ route: "cache", tool, model: "(cached)", prompt_tokens: 0, completion_tokens: 0 });
+    appendMetrics({
+      route: "cache",
+      tool,
+      model: "(cached)",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      queue_wait_ms: 0,
+      upstream_ms: 0,
+      e2e_ms: Math.max(0, Date.now() - startedAt),
+      attempt_count: 0
+    });
     return cached.answer;
   } catch {
     return undefined;
   }
 }
 
-function writeCachedAnswer(tool: string, content: string, answer: string): void {
+function writeCachedAnswer(tool: string, fingerprint: string, answer: string): void {
   const dir = liteCacheDir();
   if (!dir || LITE_CACHE_TTL_MS <= 0) return;
-  const file = path.join(dir, `${cacheKey(tool, content)}.json`);
+  const file = path.join(dir, `${cacheKey(tool, fingerprint)}.json`);
   fs.promises.writeFile(file, JSON.stringify({ ts: Date.now(), answer }), "utf8").catch(() => undefined);
 }
 
-export async function callLiteCompletion(request: string | LiteRequest, maxTokens: number, tool: string): Promise<string> {
+function visibleCompletion(raw: unknown): { content: string; inlineThinking: boolean } {
+  const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
+  const inlineThinking = /<\/?think>/i.test(text);
+  const withoutClosedBlocks = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  return {
+    content: inlineThinking
+      ? withoutClosedBlocks.replace(/<think>[\s\S]*$/i, "").replace(/<\/?think>/gi, "").trim()
+      : text,
+    inlineThinking
+  };
+}
+
+function reasoningTokenCount(usage: any): number | null {
+  const value = usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens;
+  return Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : null;
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(new Error("Lite request cancelled."));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Lite request cancelled."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export async function callLiteCompletionDetailed(
+  request: string | LiteRequest,
+  maxTokens: number,
+  tool: string,
+  options: LiteCompletionOptions = {}
+): Promise<LiteCompletionResult> {
+  const startedAt = Date.now();
   const liteRequest = typeof request === "string" ? { messages: [{ role: "user", content: request }] } : request;
-  const cacheContent = JSON.stringify(liteRequest);
-  const cached = readCachedAnswer(tool, cacheContent);
-  if (cached !== undefined) return cached;
-  const ticket = await liteSemaphore.acquire();
+  const targets = options.target ? [options.target] : liteTargets();
+  const thinkingRequested = options.thinking === true;
+  const cacheFingerprint = JSON.stringify({
+    contract_version: options.contractVersion ?? "lite.v1",
+    request: liteRequest,
+    max_tokens: maxTokens,
+    role: options.role ?? "default",
+    thinking: options.thinking ?? null,
+    targets: targets.map((target) => ({ base_url: target.baseUrl, model: target.model, label: target.label }))
+  });
+  const cached = options.bypassCache ? undefined : readCachedAnswer(tool, cacheFingerprint, startedAt);
+  if (cached !== undefined) {
+    return {
+      content: cached,
+      model: "(cached)",
+      route: "cache",
+      thinkingRequested,
+      thinkingObserved: false,
+      reasoningTokens: null
+    };
+  }
+  const queueStartedAt = Date.now();
+  const ticket = await liteSemaphore.acquire(options.signal);
+  const queueWaitMs = Math.max(0, Date.now() - queueStartedAt);
+  const upstreamStartedAt = Date.now();
   let lastError: unknown;
   let isFirstAttempt = true;
+  let attemptCount = 0;
   try {
-    for (const target of liteTargets()) {
+    for (const target of targets) {
       // P3: Add jitter before retrying the next upstream target. The first
       // attempt has no delay (don't penalise the happy path). Subsequent
       // attempts wait 0–500ms to avoid a thundering-herd pulse when multiple
       // concurrent requests all fail over to the same next target.
       if (!isFirstAttempt) {
-        await new Promise((resolve) => setTimeout(resolve, Math.random() * 500));
+        await abortableDelay(Math.random() * 500, options.signal);
       }
       isFirstAttempt = false;
+      attemptCount += 1;
       try {
         const response = await fetch(`${target.baseUrl}/chat/completions`, {
           method: "POST",
@@ -219,8 +321,12 @@ export async function callLiteCompletion(request: string | LiteRequest, maxToken
             ...(liteRequest.system ? { system: liteRequest.system } : {}),
             messages: liteRequest.messages,
             max_tokens: maxTokens,
-            stream: false
-          })
+            stream: false,
+            ...(options.thinking === undefined
+              ? {}
+              : { chat_template_kwargs: { enable_thinking: options.thinking } })
+          }),
+          signal: options.signal
         });
 
         if (!response.ok) {
@@ -229,6 +335,28 @@ export async function callLiteCompletion(request: string | LiteRequest, maxToken
         }
 
         const data = await response.json();
+        const choice = data.choices?.[0] ?? {};
+        const message = choice.message ?? {};
+        const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : undefined;
+        const reasoning =
+          typeof message.reasoning_content === "string"
+            ? message.reasoning_content
+            : typeof message.reasoning === "string"
+              ? message.reasoning
+              : "";
+        const visible = visibleCompletion(message.content);
+        const thinkingObserved = reasoning.trim().length > 0 || visible.inlineThinking;
+        const redacted = redactSecrets(visible.content);
+        if (finishReason === "length") {
+          throw new LiteCompletionError("output_truncated", `${tool} output reached max_tokens before completion`);
+        }
+        if (!redacted.trim()) {
+          throw new LiteCompletionError("empty_answer", `${tool} returned no visible answer`);
+        }
+        if (options.requireThinking && thinkingRequested && !thinkingObserved) {
+          throw new LiteCompletionError("thinking_not_observed", `${tool} requested thinking but the target returned no reasoning signal`);
+        }
+        const completedAt = Date.now();
         appendMetrics({
           route: target.label,
           tool,
@@ -236,13 +364,28 @@ export async function callLiteCompletion(request: string | LiteRequest, maxToken
           prompt_tokens: data.usage?.prompt_tokens ?? 0,
           completion_tokens: data.usage?.completion_tokens ?? 0,
           cache_hit_tokens: pickCacheTokens(data.usage),
-          cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null
+          cache_miss_tokens: data.usage?.prompt_cache_miss_tokens ?? null,
+          queue_wait_ms: queueWaitMs,
+          upstream_ms: Math.max(0, completedAt - upstreamStartedAt),
+          e2e_ms: Math.max(0, completedAt - startedAt),
+          attempt_count: attemptCount,
+          thinking_requested: thinkingRequested,
+          thinking_observed: thinkingObserved,
+          reasoning_tokens: reasoningTokenCount(data.usage),
+          finish_reason: finishReason ?? null,
+          role: options.role ?? "default"
         });
 
-        const answer = data.choices?.[0]?.message?.content;
-        const redacted = redactSecrets(typeof answer === "string" ? answer : JSON.stringify(answer ?? ""));
-        writeCachedAnswer(tool, cacheContent, redacted);
-        return redacted;
+        if (!options.bypassCache) writeCachedAnswer(tool, cacheFingerprint, redacted);
+        return {
+          content: redacted,
+          model: data.model || target.model,
+          route: target.label,
+          finishReason,
+          thinkingRequested,
+          thinkingObserved,
+          reasoningTokens: reasoningTokenCount(data.usage)
+        };
       } catch (error) {
         lastError = error;
       }
@@ -252,6 +395,15 @@ export async function callLiteCompletion(request: string | LiteRequest, maxToken
   }
 
   throw lastError instanceof Error ? lastError : new Error(`${tool} failed on all upstreams`);
+}
+
+export async function callLiteCompletion(
+  request: string | LiteRequest,
+  maxTokens: number,
+  tool: string,
+  options: LiteCompletionOptions = {}
+): Promise<string> {
+  return (await callLiteCompletionDetailed(request, maxTokens, tool, options)).content;
 }
 
 export async function analyzeDirect(prompt: string, files: string[] = [], maxTokens?: number): Promise<string> {
@@ -272,6 +424,7 @@ export function buildEvidencePack(files: string[]): {
   let truncated = false;
   for (const file of expandedFiles) {
     const content = readSandboxedFile(file);
+    if (content.includes(`...[file truncated at ${FILE_MAX_BYTES} bytes]`)) truncated = true;
     totalBytes += Buffer.byteLength(content, "utf8");
     if (totalBytes > ANALYZE_GLOB_MAX_BYTES) {
       throw new Error(`analyze files exceed ${ANALYZE_GLOB_MAX_BYTES} bytes after expansion; narrow the file list`);

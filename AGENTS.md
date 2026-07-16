@@ -33,3 +33,8 @@ tools when the task is large enough to affect context usage.
 - Remember that worker metrics can only see worker/tool audit rows. Direct
   main-thread file reads, shell output, and chat context are outside the metrics
   file unless explicitly instrumented.
+
+## Mythos Gate
+
+- 重型或高风险任务在最终结论前必须使用 `$mythos` 执行 `optimize` 或 `gate`。
+- 重型任务包括整仓/多文件修改、根因诊断、架构迁移、安全认证、发布门禁和多来源研究。

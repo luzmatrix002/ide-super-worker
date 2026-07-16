@@ -115,6 +115,21 @@ console.log("I6 read-only-fail-safe: OK");
 const metricLines = fs.existsSync(metricsFile) ? fs.readFileSync(metricsFile, "utf8").trim().split("\n").filter(Boolean) : [];
 assert(metricLines.some((line) => line.includes('"route":"cache"')), "a cache-hit metric should be recorded");
 assert(!metricLines.some((line) => line.includes("pk-primary") || line.includes("fk-fallback")), "no api key may appear in metrics");
+const metricRows = metricLines.map((line) => JSON.parse(line));
+for (const row of metricRows.filter((candidate) => ["primary", "fallback", "cache"].includes(candidate.route))) {
+  assert(Number.isInteger(row.queue_wait_ms) && row.queue_wait_ms >= 0, "lite metrics must record queue_wait_ms");
+  assert(Number.isInteger(row.upstream_ms) && row.upstream_ms >= 0, "lite metrics must record upstream_ms");
+  assert(Number.isInteger(row.e2e_ms) && row.e2e_ms >= 0, "lite metrics must record e2e_ms");
+  assert(Number.isInteger(row.attempt_count) && row.attempt_count >= 0, "lite metrics must record attempt_count");
+  assert(row.queue_wait_ms <= row.e2e_ms, "queue_wait_ms must not exceed e2e_ms");
+  assert(row.upstream_ms <= row.e2e_ms, "upstream_ms must not exceed e2e_ms");
+}
+const cacheMetric = metricRows.find((row) => row.route === "cache");
+assert.equal(cacheMetric?.attempt_count, 0, "cache hits must not report an upstream attempt");
+assert.equal(cacheMetric?.queue_wait_ms, 0, "cache hits must not wait for the lite semaphore");
+assert.equal(cacheMetric?.upstream_ms, 0, "cache hits must not report upstream time");
+const fallbackMetric = metricRows.find((row) => row.route === "fallback");
+assert.equal(fallbackMetric?.attempt_count, 2, "fallback success must record both upstream attempts");
 
 globalThis.fetch = realFetch;
 console.log("routing contract tests passed");

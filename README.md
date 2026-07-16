@@ -132,8 +132,8 @@ Use it when you want Codex to stay sharp instead of stuffed:
 | `tail` | Read recent worker logs. |
 | `wait` | Wait for completion without killing the job on poll timeout; a poll timeout keeps `outcome.status="running"`. |
 | `cancel` | Kill a running job process tree. |
-| `analyze` | Read-only cheap-model analysis for selected files or bounded globs. |
-| `review` | Cheap-model review of a job diff/checks or selected files, returning a structured verdict. |
+| `analyze` | Read-only analysis for selected files or bounded globs. `quality_mode:"high"` opts into the fail-closed `quality.v1` three-target pipeline. |
+| `review` | Review a job diff/checks or selected files. `quality_mode:"high"` requires three branches plus an independent evidence adjudicator. |
 | `search` | Zero-LLM bounded repository search using `rg` when available. |
 | `read_pack` | Zero-LLM context packer for selected paths; returns up to 16 KB of ordered symbol/keyword slices and stores the complete pack behind an artifact ref. |
 | `diff_digest` | Summarize current git diff by file, hunk headers, and risk; optionally run cheap red-team review. |
@@ -246,7 +246,7 @@ These controls reduce main-thread context, payload size, and accounting noise; t
 - `search` handles symbol/file discovery without any LLM call.
 - `review` and `WORKER_FAILURE_DIGEST=1` move diff review and failure diagnosis to the cheaper gateway.
 - `read_pack`, `diff_digest`, `shell digest`, `apply_edits`, `history`, and `draft` move the remaining high-token planning/review chores into worker lanes.
-- `WORKER_METRICS_FILE` records real gateway token usage plus `event=tool_call` rows for zero-LLM worker calls.
+- `WORKER_METRICS_FILE` records real gateway token usage plus `event=tool_call` rows for zero-LLM worker calls. Successful/cache Lite rows also include additive `queue_wait_ms`, `upstream_ms`, `e2e_ms`, and `attempt_count` fields for latency diagnosis.
 - `WORKER_EVAL_SPAN_FILE` stores validated paired-evaluation records separately; it never falls back to `JobResult.total_cost_usd`.
 - `WORKER_ESCALATE_MODEL` upgrades only failed, difficult revise passes.
 - `WORKER_RELIABILITY_TIER`, `WORKER_BLOCKING_POLICY`, `WORKER_SEMANTIC_GATE`, and `WORKER_TOOL_BUDGET` record reliability expectations and blocking risk. Defaults are observe-only to avoid surprise stalls.
@@ -293,7 +293,8 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | `DIFF_MAX_BYTES` | Maximum returned diff size. |
 | `INCLUDE_DIFF_DEFAULT` | Default for omitted `include_diff`; set `0` to omit diffs unless explicitly requested. |
 | `CHECK_OUTPUT_RESPONSE_MAX` | Per-check output cap for compact `get`/`wait` responses. |
-| `WORKER_METRICS_FILE` | Optional JSONL path for token usage metrics. |
+| `WORKER_METRICS_FILE` | Optional JSONL path for token usage, tool audit, and Lite latency metrics. |
+| `WORKER_QUALITY_TARGETS_FILE` | Optional path to the untracked versioned three-branch + reviewer config used only by `quality_mode:"high"`; keys are referenced by environment-variable name. |
 | `WORKER_EVAL_SPAN_FILE` | Optional, separate JSONL path for validated direct/worker EvalSpan records. |
 | `WORKER_EVAL_SUITE_ID` / `WORKER_EVAL_TASK_ID` / `WORKER_EVAL_RUN_ID` / `WORKER_EVAL_ARM` | Optional correlation context appended to worker metrics during isolated eval runs. |
 | `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`; accounting only, never a worker LLM cost gate. |
@@ -313,6 +314,7 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | `WORKER_TOOL_REVIEW_SINCE_MINUTES` | Review window for runtime tool error-rate control; default `180`. |
 | `WORKER_TOOL_REVIEW_GRACE_MS` | How late a scheduled review can run before it is treated as overdue; default `300000`. |
 | `WORKER_TOOL_REVIEW_DISABLED` | Set `1` to disable the runtime review loop. |
+| `WORKER_IDLE_EXIT_MS` | Exit a worker process after this much inactivity when no job is running; default `300000` (5 minutes). Each MCP request resets the deadline; `0` disables idle exit. |
 | `WORKER_TOOL_CIRCUIT_BREAKER` | Active runtime containment switch; default enabled. Set `0` to disable per-tool/per-error-class circuits. |
 | `WORKER_TOOL_CIRCUIT_WINDOW_MS` | Rolling window for immediate circuit decisions; default `900000`. |
 | `WORKER_TOOL_CIRCUIT_OPEN_MS` | How long an opened circuit intercepts the unhealthy route; default `600000`. |
@@ -366,6 +368,13 @@ npm run codex:guard
 `npm run codex:guard` runs the local Codex audit and then `stats:gate`.
 
 `npm run eval:contracts` validates the EvalSpan v1 importer and paired/pilot fail-closed rules. `npm run eval:fixtures` verifies the frozen 10-task pilot corpus and its SHA-256. Import external usage with `npm run eval:gate -- --import producer.jsonl --out .eval/eval-spans.jsonl`; gate a completed pilot with `npm run eval:gate -- --input .eval/eval-spans.jsonl --mode pilot`. `WORKER_METRICS_FILE` is operational telemetry, not a substitute for the required raw provider export for non-zero worker-model usage; without that provider export, the pilot is incomplete. The pilot proves measurement completeness only, not cost savings or quality non-inferiority. The full producer and formal-manifest contract is in [eval/README.md](eval/README.md); run the preregistered 200-400 task gate with `npm run eval:formal -- --input <spans.jsonl> --manifest <manifest.json>`.
+
+`npm run eval:quality -- --input <quality-pairs.jsonl>` evaluates the separate
+Trial A -> B -> C quality qualification program. Passing unit tests or a 40+40
+engineering pilot does not authorize high mode as the default; only real frozen,
+blindly evaluated pairs can produce that qualification. See
+[QUALITY_FIRST_PLAN.md](QUALITY_FIRST_PLAN.md), [eval/README.md](eval/README.md),
+and the bilingual [quality-first iteration guide](docs/quality-first-iteration.zh-CN.md).
 
 `npm run skills:validate` checks the project-specific `.claude/skills/` library used to preserve project doctrine for cheaper or lower-context worker sessions.
 

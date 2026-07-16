@@ -69,6 +69,7 @@ import { redactSecrets } from "./redact.js";
 import { searchWorkspace } from "./search.js";
 import { validateAllowedDirs, validateScopedPatch } from "./security.js";
 import { runSemanticReview, type SemanticReviewResult } from "./semantic_review.js";
+import { runHighQualityAnalyze, runHighQualityReview } from "./quality_mode.js";
 import {
   getToolControlDecision,
   getToolErrorControlStartDefaults,
@@ -1613,6 +1614,11 @@ export function createCodexWorkerServer(): Server {
             prompt: { type: "string" },
             files: { type: "array", items: { type: "string" } },
             max_tokens: { type: "number" },
+            quality_mode: {
+              type: "string",
+              enum: ["standard", "high"],
+              description: "standard preserves the single-call contract; high runs the fail-closed quality.v1 pipeline. Defaults to standard."
+            },
             branches: {
               type: "array",
               description: "2–3 independent focus areas for concurrent fan-out analysis. Each branch shares the same prompt/files but adds its own focus.",
@@ -1650,6 +1656,11 @@ export function createCodexWorkerServer(): Server {
             files: { type: "array", items: { type: "string" } },
             focus: { type: "string" },
             max_tokens: { type: "number" },
+            quality_mode: {
+              type: "string",
+              enum: ["standard", "high"],
+              description: "standard preserves the existing review contract; high runs the fail-closed quality.v1 pipeline. Defaults to standard."
+            },
             branches: {
               type: "array",
               description: "2–3 independent review dimensions for concurrent fan-out review. Each branch shares the same job_id/files/focus but adds its own focus.",
@@ -1950,6 +1961,40 @@ export function createCodexWorkerServer(): Server {
         }
         const files = Array.isArray(toolArgs.files) ? toolArgs.files.map(String) : [];
         const maxTokens = typeof toolArgs.max_tokens === "number" ? toolArgs.max_tokens : undefined;
+        const qualityMode = toolArgs.quality_mode === undefined ? "standard" : toolArgs.quality_mode;
+        if (qualityMode !== "standard" && qualityMode !== "high") {
+          return reject("analyze", "analysis", "quality_mode must be standard or high", "Use quality_mode=standard or quality_mode=high.", [
+            "analyze"
+          ]);
+        }
+
+        if (qualityMode === "high") {
+          if (Array.isArray(toolArgs.branches) && toolArgs.branches.length > 0) {
+            return reject(
+              "analyze",
+              "analysis",
+              "quality_mode=high defines its own fixed branches",
+              "Remove branches and aggregate; the quality.v1 coordinator supplies three fixed roles.",
+              ["analyze"]
+            );
+          }
+          try {
+            const evidence = buildEvidencePack(files);
+            const result = await runHighQualityAnalyze({
+              prompt,
+              evidenceContent: evidence.content,
+              evidenceTruncated: evidence.truncated
+            });
+            metricExtra = { quality_mode: "high", quality_status: result.status, quality_reason_codes: result.reason_codes };
+            return okJson(result);
+          } catch (error: any) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (isRejectableInputError(msg)) {
+              return reject("analyze", "analysis", msg, "Narrow the file list or use read_pack on fewer, smaller files.", ["read_pack", "search"]);
+            }
+            return fail("analyze", "analysis", error);
+          }
+        }
 
         // Fan-out path: if branches are provided, run concurrent analysis.
         const branches = toolArgs.branches;
@@ -1981,6 +2026,10 @@ export function createCodexWorkerServer(): Server {
                 "read_pack"
               ]);
             }
+            const msg = error instanceof Error ? error.message : String(error);
+            if (isRejectableInputError(msg)) {
+              return reject("analyze", "analysis", msg, "Correct the file paths or narrow the evidence set.", ["read_pack", "search"]);
+            }
             return fail("analyze", "analysis", error);
           }
         }
@@ -1990,7 +2039,7 @@ export function createCodexWorkerServer(): Server {
           return textResponse(answer);
         } catch (error: any) {
           const msg = error instanceof Error ? error.message : String(error);
-          if (msg.includes("exceed") && msg.includes("bytes")) {
+          if (isRejectableInputError(msg)) {
             return reject("analyze", "analysis", msg, "Narrow the file list or use read_pack on fewer, smaller files.", ["read_pack", "search"]);
           }
           return fail("analyze", "analysis", error);
@@ -2016,6 +2065,43 @@ export function createCodexWorkerServer(): Server {
             "read_pack"
           ]);
         }
+        const qualityMode = toolArgs.quality_mode === undefined ? "standard" : toolArgs.quality_mode;
+        if (qualityMode !== "standard" && qualityMode !== "high") {
+          return reject("review", "review", "quality_mode must be standard or high", "Use quality_mode=standard or quality_mode=high.", [
+            "review"
+          ]);
+        }
+        const fileReview = job ? { diff: undefined, files: [] } : reviewDiffForFiles(files);
+
+        if (qualityMode === "high") {
+          if (Array.isArray(toolArgs.branches) && toolArgs.branches.length > 0) {
+            return reject(
+              "review",
+              "review",
+              "quality_mode=high defines its own fixed branches",
+              "Remove branches and aggregate; the quality.v1 coordinator supplies three fixed roles.",
+              ["review"]
+            );
+          }
+          try {
+            const sharedEvidence = buildEvidencePack(fileReview.files.length > 0 ? fileReview.files : files);
+            const result = await runHighQualityReview({
+              task: typeof toolArgs.focus === "string" ? toolArgs.focus : `Review job ${jobId || "files"}`,
+              diff: job?.result.diff ?? fileReview.diff,
+              checks: job?.result.checks,
+              evidenceContent: sharedEvidence.content,
+              evidenceTruncated: sharedEvidence.truncated
+            });
+            metricExtra = { quality_mode: "high", quality_status: result.status, quality_reason_codes: result.reason_codes };
+            return okJson(result);
+          } catch (error: any) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (isRejectableInputError(msg)) {
+              return reject("review", "review", msg, "Narrow the file list or use diff_digest on a focused diff.", ["diff_digest", "read_pack"]);
+            }
+            return fail("review", "review", error);
+          }
+        }
 
         // Fan-out path: if branches are provided, run concurrent review.
         const branches = toolArgs.branches;
@@ -2028,7 +2114,6 @@ export function createCodexWorkerServer(): Server {
           }
           try {
             const validatedBranches = validateBranches(branches);
-            const fileReview = job ? { diff: undefined, files: [] } : reviewDiffForFiles(files);
             const sharedEvidence = buildEvidencePack(fileReview.files.length > 0 ? fileReview.files : files);
             validateFanoutEvidence(sharedEvidence);
             const aggregate =
@@ -2057,11 +2142,14 @@ export function createCodexWorkerServer(): Server {
                 "diff_digest", "read_pack"
               ]);
             }
+            const msg = error instanceof Error ? error.message : String(error);
+            if (isRejectableInputError(msg)) {
+              return reject("review", "review", msg, "Correct the file paths or narrow the evidence set.", ["diff_digest", "read_pack"]);
+            }
             return fail("review", "review", error);
           }
         }
 
-        const fileReview = job ? { diff: undefined, files: [] } : reviewDiffForFiles(files);
         let raw: string;
         try {
           raw = await reviewDirect({
@@ -2073,7 +2161,7 @@ export function createCodexWorkerServer(): Server {
           });
         } catch (error: any) {
           const msg = error instanceof Error ? error.message : String(error);
-          if (msg.includes("exceed") && msg.includes("bytes")) {
+          if (isRejectableInputError(msg)) {
             return reject("review", "review", msg, "Narrow the file list or use diff_digest on a focused diff.", ["diff_digest", "read_pack"]);
           }
           return fail("review", "review", error);

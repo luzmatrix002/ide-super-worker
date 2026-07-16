@@ -25,7 +25,8 @@ const sinceMinutes = sinceArg
   : Number(process.env.WORKER_STATS_SINCE_MINUTES || "");
 const sinceMs = Number.isFinite(sinceMinutes) && sinceMinutes > 0 ? Date.now() - sinceMinutes * 60_000 : undefined;
 const fileArg = cliArgs.find((arg) => !arg.startsWith("--"));
-const file = fileArg || process.env.WORKER_METRICS_FILE;
+const configuredFile = fileArg || process.env.WORKER_METRICS_FILE;
+const file = configuredFile ? path.resolve(configuredFile) : undefined;
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 
 const numberEnv = (name) => {

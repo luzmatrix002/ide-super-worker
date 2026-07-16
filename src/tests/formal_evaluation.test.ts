@@ -195,6 +195,13 @@ assert.ok(Math.abs(passed.metrics.premium_tokens.reduction - 2 / 3) < 1e-12);
 assert.ok(Math.abs(passed.metrics.total_cost.reduction - 0.5) < 1e-12);
 assert.equal(passed.metrics.quality.pass_delta, 0);
 assert.equal(passed.metrics.quality.one_sided_95_lower_bound, 0);
+assert.equal(passed.metrics.quality.one_sided_95_upper_bound, 0);
+assert.equal(passed.metrics.quality.by_category.analyze_diagnosis.task_count, 35);
+assert.equal(passed.metrics.quality.by_category.analyze_diagnosis.pass_delta, 0);
+assert.equal(passed.metrics.quality.by_category.analyze_diagnosis.one_sided_95_lower_bound, 0);
+assert.equal(passed.metrics.quality.by_category.analyze_diagnosis.one_sided_95_upper_bound, 0);
+assert.equal(passed.metrics.quality.by_category.review.task_count, 35);
+assert.equal(passed.metrics.quality.by_category.review.discordant_pairs, 0);
 assert.equal(passed.metrics.power.value, 1);
 assert.equal(passed.metrics.mcnemar.p_value, 1);
 
@@ -318,6 +325,21 @@ assert.ok(qualityFailure.metrics.quality.one_sided_95_lower_bound < -0.05);
 assert.equal(qualityFailure.status, "failed");
 assert.ok(qualityFailure.reason_codes.includes("quality_noninferiority_failed"));
 
+const reviewRegression = evaluateFormalEval(
+  spansFor(baseManifest, (index) => ({
+    direct: true,
+    worker: baseManifest.tasks[index].category !== "review" || index % 5 !== 0
+  })),
+  baseManifest
+);
+assert.equal(reviewRegression.metrics.quality.by_category.analyze_diagnosis.pass_delta, 0);
+assert(reviewRegression.metrics.quality.by_category.review.pass_delta < -0.1);
+assert.equal(
+  reviewRegression.metrics.quality.by_category.review.direct_only_passes,
+  reviewRegression.metrics.quality.by_category.review.discordant_pairs
+);
+assert.equal(reviewRegression.metrics.quality.by_category.review.worker_only_passes, 0);
+
 assert.equal(mcnemarExactTwoSided(0, 0), 1);
 assert.ok(Math.abs(mcnemarExactTwoSided(10, 0) - 0.001953125) < 1e-15);
 
@@ -334,7 +356,12 @@ function runCli(inputManifest: FormalEvalManifestV1, spans: EvalSpanV1[]) {
   );
 }
 
-assert.equal(runCli(baseManifest, passedSpans).status, 0);
+const passedCli = runCli(baseManifest, passedSpans);
+assert.equal(passedCli.status, 0);
+const passedCliSummary = JSON.parse(passedCli.stdout);
+assert.equal(passedCliSummary.metrics.quality.one_sided_95_upper_bound, 0);
+assert.equal(passedCliSummary.metrics.quality.by_category.analyze_diagnosis.task_count, 35);
+assert.equal(passedCliSummary.metrics.quality.by_category.review.task_count, 35);
 assert.equal(runCli(baseManifest, lowSavings).status, 2);
 assert.equal(
   runCli(

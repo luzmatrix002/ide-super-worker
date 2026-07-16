@@ -8,6 +8,7 @@ export type ShellFailureKind =
   | "missing_command"
   | "test_failure"
   | "typecheck_failure"
+  | "gate_failure"
   | "dependency_missing"
   | "permission_denied"
   | "unknown_failure";
@@ -39,7 +40,14 @@ export function assessShellFailure(
   const combined = `${command}\n${output}`;
   if (status === "timeout" || /timed out|timeout/i.test(output)) return "timeout";
   if (
-    /\b(Get-Content|ForEach-Object|Write-Output|Remove-Item|Set-Location|Select-String|Get-ChildItem)\b|\$[A-Za-z_][A-Za-z0-9_]*/.test(
+    /\[fail\]/i.test(output) ||
+    (/(?:npm\s+run\s+)?(?:stats:gate|codex:audit|codex:guard)\b/i.test(command) &&
+      /error rate|must stay below|gate\s+(?:failed|inconclusive)|audit\s+failed/i.test(output))
+  ) {
+    return "gate_failure";
+  }
+  if (
+    /\b(Get-Content|ForEach-Object|Write-Output|Remove-Item|Set-Location|Select-Object|Select-String|Get-ChildItem)\b|\$[A-Za-z_][A-Za-z0-9_]*/.test(
       command
     )
   ) {
@@ -74,6 +82,8 @@ export function shellFailureAction(kind: ShellFailureKind): string {
       return "Fix the failing test or application code using the compact digest and artifact output, then rerun the smallest failing command.";
     case "typecheck_failure":
       return "Fix the reported TypeScript/import/schema errors, then rerun the same typecheck command.";
+    case "gate_failure":
+      return "Inspect the reported policy violations, correct the underlying metrics or routing behavior, then rerun the same gate.";
     case "dependency_missing":
       return "Verify dependencies and module names; run install only when dependency installation is intended for this workspace.";
     case "permission_denied":
@@ -107,7 +117,9 @@ export function shellToolDisposition(
   failureKind?: ShellFailureKind
 ): Exclude<ToolMetricStatus, "rejected"> {
   if (status === "passed") return "ok";
-  return failureKind === "test_failure" || failureKind === "typecheck_failure" ? "ok" : "error";
+  return failureKind === "test_failure" || failureKind === "typecheck_failure" || failureKind === "gate_failure"
+    ? "ok"
+    : "error";
 }
 
 function payloadObjectFromValue(value: unknown): Record<string, any> | undefined {

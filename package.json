@@ -20,13 +20,14 @@
     "eval:fixtures": "node scripts/eval_fixtures.mjs",
     "eval:gate": "node scripts/eval_gate.mjs",
     "eval:formal": "node scripts/eval_formal.mjs",
+    "eval:quality": "npm run build && node scripts/eval_quality.mjs",
     "promo:dry-run": "tsx src/promo_publish.ts",
     "promo:publish": "tsx src/promo_publish.ts --execute",
     "skills:validate": "node scripts/validate_skills.mjs",
     "stats": "node scripts/stats.mjs",
     "stats:gate": "node scripts/stats.mjs --gate --since-minutes=60",
     "smoke": "npm run build && node dist/smoke_test.js",
-    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js && node dist/tests/fanout.test.js && node dist/tests/global_concurrency.test.js && node dist/tests/evidence_delivery.test.js && node dist/tests/failure_semantics.test.js && node dist/tests/windows_installer.test.js"
+    "test": "npm run build && node dist/tests/core.test.js && node dist/tests/routing_contract.test.js && node dist/tests/outcome.test.js && node dist/tests/outcome_integration.test.js && node dist/tests/semantic_review.test.js && node dist/tests/evaluation.test.js && node dist/tests/formal_evaluation.test.js && node dist/tests/quality_targets.test.js && node dist/tests/quality_evaluation.test.js && node dist/tests/quality_mode.test.js && node dist/tests/checks_contract.test.js && node dist/tests/metrics_eval_context.test.js && node dist/tests/promo_publish.test.js && node dist/tests/fanout.test.js && node dist/tests/global_concurrency.test.js && node dist/tests/evidence_delivery.test.js && node dist/tests/failure_semantics.test.js && node dist/tests/process_lifecycle.test.js && node dist/tests/windows_installer.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
@@ -47,6 +48,8 @@
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "PROMO.md",
+    "QUALITY_FIRST_PLAN.md",
+    "quality-targets.example.json",
     "RELEASE_CHECKLIST.md",
     "codex-mcp.example.toml",
     "scripts",

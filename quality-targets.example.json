@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "branches": [
+    {
+      "id": "primary",
+      "base_url": "https://provider-a.example/v1",
+      "api_key_env": "QUALITY_KEY_A",
+      "model": "model-a",
+      "thinking": "probe"
+    },
+    {
+      "id": "independent",
+      "base_url": "https://provider-b.example/v1",
+      "api_key_env": "QUALITY_KEY_B",
+      "model": "model-b",
+      "thinking": "probe"
+    },
+    {
+      "id": "red_team",
+      "base_url": "https://provider-c.example/v1",
+      "api_key_env": "QUALITY_KEY_C",
+      "model": "model-c",
+      "thinking": "probe"
+    }
+  ],
+  "reviewer": {
+    "base_url": "https://provider-d.example/v1",
+    "api_key_env": "QUALITY_REVIEW_KEY",
+    "model": "strong-reviewer",
+    "thinking": "probe"
+  }
+}

@@ -1,4 +1,5 @@
 import "./env.js"; // load .env before config reads process.env
+import * as path from "node:path";
 import { checkClaudeCli, resolveClaudeCommand } from "./claude.js";
 import { clampMaxTokens, ensureAnthropicOpenAIAdapter, shouldUseOpenAIAdapter, thinkStripEnabled } from "./anthropic_openai_adapter.js";
 import {
@@ -20,6 +21,7 @@ import {
   SANDBOX_ROOT,
   WAIT_DEFAULT_MS
 } from "./config.js";
+import { resolvedMetricsFile } from "./metrics.js";
 
 function isLocalHttp(url: URL): boolean {
   const host = url.hostname.toLowerCase();
@@ -129,6 +131,8 @@ async function main(): Promise<void> {
   console.log(`  adapter qwen thinking: ${process.env.ADAPTER_ENABLE_THINKING === "1" ? "enabled" : "disabled"}`);
   console.log(`  adapter strip <think>: ${thinkStripEnabled() ? "enabled" : "disabled"}`);
   console.log(`  adapter max tokens clamp: ${process.env.ADAPTER_MAX_TOKENS ? clampMaxTokens(undefined) : "(off)"}`);
+  console.log(`  metrics file: ${resolvedMetricsFile() || "(not set)"}`);
+  console.log(`  quality targets file: ${process.env.WORKER_QUALITY_TARGETS_FILE ? path.resolve(process.env.WORKER_QUALITY_TARGETS_FILE) : "(not set)"}`);
   console.log(`  adapter heartbeat ms: ${Math.max(1000, Number(process.env.ADAPTER_HEARTBEAT_MS) || 15000)}`);
   console.log(`  log buffer max: ${LOG_BUFFER_MAX}`);
   console.log(`  raw stream max bytes: ${RAW_STREAM_MAX}`);

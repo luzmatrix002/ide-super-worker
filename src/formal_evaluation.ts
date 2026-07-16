@@ -35,6 +35,18 @@ export interface FormalEvalManifestV1 {
   tasks: FormalEvalTaskV1[];
 }
 
+export interface FormalCategoryQualityEvidenceV1 {
+  task_count: number;
+  direct_pass_rate: number;
+  worker_pass_rate: number;
+  pass_delta: number;
+  one_sided_95_lower_bound: number;
+  one_sided_95_upper_bound: number;
+  direct_only_passes: number;
+  worker_only_passes: number;
+  discordant_pairs: number;
+}
+
 export interface FormalEvalSummaryV1 {
   schema_version: 1;
   status: FormalEvalStatus;
@@ -64,10 +76,12 @@ export interface FormalEvalSummaryV1 {
       worker_pass_rate: number;
       pass_delta: number;
       one_sided_95_lower_bound: number;
+      one_sided_95_upper_bound: number;
       noninferiority_margin: -0.05;
       bootstrap_samples: 10_000;
       bootstrap_seed: 20_260_710;
       meets_threshold: boolean;
+      by_category: Record<FormalEvalCategory, FormalCategoryQualityEvidenceV1>;
     };
     mcnemar: {
       direct_only_passes: number;
@@ -307,9 +321,11 @@ function quantile(values: number[], probability: number): number {
 
 /**
  * Resample paired pass differences with replacement inside each category x source stratum.
- * The lower bound is the Type-7 fifth percentile of 10,000 seeded bootstrap deltas.
+ * The bounds are the Type-7 fifth and 95th percentiles of 10,000 seeded bootstrap deltas.
  */
-function stratifiedBootstrapLowerBound(pairs: readonly FormalPair[]): number {
+function stratifiedBootstrapBounds(
+  pairs: readonly FormalPair[]
+): { lower: number; upper: number } {
   const strata = new Map<string, number[]>();
   for (const pair of pairs) {
     const key = `${pair.task.category}\u0000${pair.task.source}`;
@@ -328,7 +344,31 @@ function stratifiedBootstrapLowerBound(pairs: readonly FormalPair[]): number {
     }
     deltas[iteration] = sum / pairs.length;
   }
-  return quantile(deltas, 0.05);
+  return { lower: quantile(deltas, 0.05), upper: quantile(deltas, 0.95) };
+}
+
+function pairedQualityEvidence(pairs: readonly FormalPair[]): FormalCategoryQualityEvidenceV1 {
+  if (pairs.length === 0) fail("FormalEval quality evidence", "requires at least one pair");
+  const directPasses = pairs.filter((pair) => pair.direct.acceptance.pass).length;
+  const workerPasses = pairs.filter((pair) => pair.worker.acceptance.pass).length;
+  const directOnlyPasses = pairs.filter(
+    (pair) => pair.direct.acceptance.pass && !pair.worker.acceptance.pass
+  ).length;
+  const workerOnlyPasses = pairs.filter(
+    (pair) => !pair.direct.acceptance.pass && pair.worker.acceptance.pass
+  ).length;
+  const bounds = stratifiedBootstrapBounds(pairs);
+  return {
+    task_count: pairs.length,
+    direct_pass_rate: directPasses / pairs.length,
+    worker_pass_rate: workerPasses / pairs.length,
+    pass_delta: (workerPasses - directPasses) / pairs.length,
+    one_sided_95_lower_bound: bounds.lower,
+    one_sided_95_upper_bound: bounds.upper,
+    direct_only_passes: directOnlyPasses,
+    worker_only_passes: workerOnlyPasses,
+    discordant_pairs: directOnlyPasses + workerOnlyPasses
+  };
 }
 
 /** Exact two-sided McNemar p-value, conditioning on the number of discordant pairs. */
@@ -397,19 +437,20 @@ export function evaluateFormalEval(
   const costReduction = 1 - workerCost / directCost;
   const premiumMeetsThreshold = premiumReduction + 1e-12 >= 0.5;
   const costMeetsThreshold = costReduction + 1e-12 >= 0.3;
-  const directPasses = pairs.filter((pair) => pair.direct.acceptance.pass).length;
-  const workerPasses = pairs.filter((pair) => pair.worker.acceptance.pass).length;
-  const directOnlyPasses = pairs.filter(
-    (pair) => pair.direct.acceptance.pass && !pair.worker.acceptance.pass
-  ).length;
-  const workerOnlyPasses = pairs.filter(
-    (pair) => !pair.direct.acceptance.pass && pair.worker.acceptance.pass
-  ).length;
-  const discordantPairs = directOnlyPasses + workerOnlyPasses;
-  const directPassRate = directPasses / taskCount;
-  const workerPassRate = workerPasses / taskCount;
-  const passDelta = workerPassRate - directPassRate;
-  const lowerBound = stratifiedBootstrapLowerBound(pairs);
+  const quality = pairedQualityEvidence(pairs);
+  const categoryQuality = Object.fromEntries(
+    FORMAL_EVAL_CATEGORIES.map((category) => [
+      category,
+      pairedQualityEvidence(pairs.filter((pair) => pair.task.category === category))
+    ])
+  ) as Record<FormalEvalCategory, FormalCategoryQualityEvidenceV1>;
+  const directOnlyPasses = quality.direct_only_passes;
+  const workerOnlyPasses = quality.worker_only_passes;
+  const discordantPairs = quality.discordant_pairs;
+  const directPassRate = quality.direct_pass_rate;
+  const workerPassRate = quality.worker_pass_rate;
+  const passDelta = quality.pass_delta;
+  const lowerBound = quality.one_sided_95_lower_bound;
   const power = noninferiorityPower(discordantPairs, taskCount);
   const routedOnlyCriticalDefects = pairs.reduce(
     (sum, pair) => {
@@ -483,10 +524,12 @@ export function evaluateFormalEval(
         worker_pass_rate: workerPassRate,
         pass_delta: passDelta,
         one_sided_95_lower_bound: lowerBound,
+        one_sided_95_upper_bound: quality.one_sided_95_upper_bound,
         noninferiority_margin: -0.05,
         bootstrap_samples: FORMAL_EVAL_BOOTSTRAP_SAMPLES,
         bootstrap_seed: FORMAL_EVAL_BOOTSTRAP_SEED,
-        meets_threshold: lowerBound + 1e-12 >= -0.05
+        meets_threshold: lowerBound + 1e-12 >= -0.05,
+        by_category: categoryQuality
       },
       mcnemar: {
         direct_only_passes: directOnlyPasses,

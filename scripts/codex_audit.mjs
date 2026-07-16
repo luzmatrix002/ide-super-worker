@@ -64,6 +64,7 @@ function pct(numerator, denominator) {
 
 loadDotEnv();
 
+const cliArgs = process.argv.slice(2);
 const sinceMinutes = numberArg("since-minutes", 60);
 const requiredCategories = listArg("required-categories", [
   "search",
@@ -73,9 +74,17 @@ const requiredCategories = listArg("required-categories", [
   "analysis",
   "review"
 ]);
-const metricsFile = process.argv.slice(2).find((item) => !item.startsWith("--")) || process.env.WORKER_METRICS_FILE;
+const unsupportedArgs = cliArgs.filter(
+  (item) => item.startsWith("--") && !item.startsWith("--since-minutes=") && !item.startsWith("--required-categories=")
+);
+const configuredMetricsFile = cliArgs.find((item) => !item.startsWith("--")) || process.env.WORKER_METRICS_FILE;
+const metricsFile = configuredMetricsFile ? path.resolve(configuredMetricsFile) : undefined;
 const failures = [];
 const warnings = [];
+
+if (unsupportedArgs.length > 0) {
+  failures.push(`unsupported argument(s): ${unsupportedArgs.join(", ")}; use --since-minutes=<number>`);
+}
 
 if (!metricsFile) {
   failures.push("WORKER_METRICS_FILE is not set");

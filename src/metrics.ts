@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 let fallbackCallCount = 0;
+
+export function resolvedMetricsFile(env: Readonly<Record<string, string | undefined>> = process.env): string | undefined {
+  const raw = env.WORKER_METRICS_FILE?.trim();
+  return raw ? path.resolve(raw) : undefined;
+}
 
 export type WorkerCategory =
   | "artifact"
@@ -45,7 +51,7 @@ export function recordFallbackCall(): void {
 // Enabled only when WORKER_METRICS_FILE is set. Failures are swallowed so that
 // observability can never break the main request path.
 export function appendMetrics(row: Record<string, unknown>): void {
-  const baseFile = process.env.WORKER_METRICS_FILE;
+  const baseFile = resolvedMetricsFile();
   const file = baseFile && process.env.WORKER_METRICS_SHARD_BY_PID === "1" ? `${baseFile}.${process.pid}` : baseFile;
   if (!file) return;
   try {
