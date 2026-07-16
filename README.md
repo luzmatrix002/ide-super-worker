@@ -1,5 +1,73 @@
 # IDE Super Worker
 
+[中文说明](#中文说明) · [English](#ide-super-worker)
+
+## 中文说明
+
+不要把宝贵的 Codex 上下文花在批量读文件、反复修补和超大 diff 上。
+
+`ide-super-worker` 将耗时的编码工作委派给运行在更低成本
+OpenAI 兼容网关上的异步 worker。Codex 仍负责规划、判断与审阅，只接收必要的
+压缩证据：改动文件、检查结果、日志和可选的裁剪 diff。
+
+> **2.6 测量状态：** 仓库已具备成对成本/质量指标和失败即停止的验收机制，但未附带
+> 真实的 10 对试点或 200 任务正式评估。在这些门禁通过前，不应宣称已节省成本或质量
+> 不劣，也不要仅凭此版本扩大默认自动路由。
+
+![IDE Super Worker 效率通道 / efficiency lane](docs/efficiency-lane.svg)
+
+### 它怎样工作
+
+```mermaid
+flowchart LR
+  A["Codex\n规划与审阅"] -->|"精简 MCP 请求"| B["IDE Super Worker"]
+  B -->|"启动"| C["Claude Code CLI\n后台任务"]
+  C -->|"廉价模型网关"| D["OpenAI-compatible model"]
+  C -->|"改动 + 检查"| B
+  B -->|"压缩证据"| A
+```
+
+- `search`：零 LLM 的仓库发现。
+- `analyze`、`review`：只读的低成本分析与审阅。
+- `start`：将读文件、编辑、测试等实施循环放入后台 worker。
+- `get`、`wait`：只把必要的文件变更、检查与摘要带回 Codex 主线程。
+
+这样 Codex 专注于高价值判断，worker 吸收冗长的中间过程，减少主线程需要读取的
+文件和测试日志。
+
+### 质量优先模式
+
+`analyze` 和 `review` 可显式传入 `quality_mode:"high"`。该模式是可选且
+**失败即停止（fail-closed）** 的：三个固定角色分支完成分析后，交由独立审阅器裁决；
+任何截断输出、空答案、模型不匹配、无效引用或未解决分歧，都会返回
+`needs_direct_review` 或 `failed`，绝不悄悄回退为普通答案。
+
+```mermaid
+flowchart LR
+  A["高质量请求"] --> B["主分析 / 独立 / 红队"]
+  B --> C["独立审阅器"]
+  C --> D{证据与结论完整？}
+  D -->|是| E["quality.v1 结果"]
+  D -->|否| F["人工直接审阅 / 失败"]
+```
+
+默认仍为 `standard`。只有通过真实冻结任务、盲评和 Trial A → B → C 的资格门禁，
+才可讨论更改默认路由。详细的中英文迭代说明见
+[质量优先迭代说明](docs/quality-first-iteration.zh-CN.md)。
+
+### 快速开始
+
+```bash
+npm install
+npm run build
+npm test
+```
+
+配置示例与完整工具说明在下方英文文档中；质量模式环境变量示例见
+[`.env.example`](.env.example)，评估要求见 [eval/README.md](eval/README.md)。
+
+---
+
 Stop spending premium Codex context on bulk code reading, patch loops, and giant diffs.
 
 `ide-super-worker` lets Codex delegate the expensive part of a coding task to an async worker running on a cheaper OpenAI-compatible model gateway. Codex stays in charge, but it only receives the compact evidence it needs: changed files, checks, logs, and an optional trimmed diff.
