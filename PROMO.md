@@ -1,5 +1,26 @@
 # Promotion Kit
 
+## 中文发布短文
+
+我做了一个给 Codex 用的异步 MCP worker：把大文件阅读、代码修复、反复跑测试这些
+冗长工作移到低成本 worker，Codex 主线程只接收改动文件、检查结果和必要的摘要。
+
+它不是“再套一层便宜模型”，而是把任务按风险和成本分流：
+
+- `search` 在本地检索，不调用模型；
+- `analyze`、`review` 用只读低成本路径；
+- `start` 在后台执行读代码、修改和测试循环；
+- 主线程只审阅压缩证据，而不是吞完整日志和大 diff。
+
+新增的 `quality_mode:"high"` 采用三分支分析加独立审阅器，并且失败即停止：证据不完整、
+输出截断或结论有冲突时会要求人工直接审阅，绝不静默降级。
+
+适合需要在大仓库里反复读、改、测，又不想让主线程被中间过程塞满的场景。项目和完整的
+中英文说明：<https://github.com/luzmatrix002/ide-super-worker>
+
+发布时不要宣称“保证省钱”或“质量不降”。更准确的说法是：它通过返回压缩证据，减少大规模
+读/改/测循环中需要进入 Codex 主线程的中间上下文；实际成本和质量需由真实任务评估确认。
+
 ## Latest Release Angle
 
 IDE Super Worker 2.5.0 is now focused on one practical promise: keep Codex on the high-value planning and review path, and push bulky code-reading, repair, checks, review, and failure diagnosis into a cheaper worker lane.
