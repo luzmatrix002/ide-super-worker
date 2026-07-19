@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { routingCoverage } from "../dist/routing_observation.js";
 
 function loadDotEnv(file = path.resolve(process.cwd(), ".env")) {
   if (!fs.existsSync(file)) return;
@@ -27,6 +28,7 @@ const sinceMs = Number.isFinite(sinceMinutes) && sinceMinutes > 0 ? Date.now() -
 const fileArg = cliArgs.find((arg) => !arg.startsWith("--"));
 const configuredFile = fileArg || process.env.WORKER_METRICS_FILE;
 const file = configuredFile ? path.resolve(configuredFile) : undefined;
+const routingFile = process.env.WORKER_ROUTING_EVENTS_FILE ? path.resolve(process.env.WORKER_ROUTING_EVENTS_FILE) : undefined;
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 
 const numberEnv = (name) => {
@@ -351,7 +353,6 @@ const gateFailures = [];
 
 if (fallbackRatio > 10) {
   console.error(`[warn] fallback ratio ${fallbackRatio.toFixed(1)}% exceeds 10%`);
-  if (gateEnabled) gateFailures.push(`fallback_ratio ${fallbackRatio.toFixed(1)}% exceeds 10%`);
 }
 
 const categoryTargets = {
@@ -398,7 +399,7 @@ const categoryTotals = new Map();
 if (toolGroups.size > 0) {
   console.log("");
   console.log("Worker Tool Audit");
-  console.log("category\ttool\tworker_calls\tmain_calls\tother_calls\tworker_ratio\ttarget\tstatus\terror_rate\trejected_calls");
+  console.log("category\ttool\tworker_calls\tmain_calls\tother_calls\tlegacy_recorded_worker_share\ttarget\tstatus\terror_rate\trejected_calls");
   for (const group of toolGroups.values()) {
     const current = categoryTotals.get(group.category) || { worker: 0, main: 0, other: 0, ok: 0, error: 0, rejected: 0, redTeam: 0 };
     current.worker += group.worker;
@@ -416,7 +417,8 @@ if (toolGroups.size > 0) {
     const ratio = denominator > 0 ? (total.worker / denominator) * 100 : undefined;
     const target = categoryTargets[category]?.min;
     const status = target === undefined || ratio === undefined ? "observe" : ratio >= target ? "ok" : "below_target";
-    const errorRate = total.worker + total.main + total.other > 0 ? (total.error / (total.worker + total.main + total.other)) * 100 : 0;
+    const attemptedCalls = Math.max(0, total.worker + total.main + total.other - total.rejected);
+    const errorRate = attemptedCalls > 0 ? (total.error / attemptedCalls) * 100 : 0;
     console.log(
       [
         category,
@@ -433,9 +435,8 @@ if (toolGroups.size > 0) {
     );
     if (status === "below_target") {
       console.error(`[warn] ${category} worker ratio ${ratio.toFixed(1)}% is below target ${target}%: ${categoryTargets[category].note}`);
-      if (gateEnabled) gateFailures.push(`${category} worker ratio ${ratio.toFixed(1)}% below target ${target}%`);
     }
-    const errorGateCalls = total.worker + total.main + total.other;
+    const errorGateCalls = attemptedCalls;
     if (gateEnabled && errorGateCalls >= minToolErrorGateCalls && errorRate >= maxCategoryErrorRate) {
       gateFailures.push(`${category} error rate ${errorRate.toFixed(1)}% must stay below ${maxCategoryErrorRate}%`);
     }
@@ -444,7 +445,8 @@ if (toolGroups.size > 0) {
   for (const group of [...toolGroups.values()].sort((a, b) => b.worker + b.main - (a.worker + a.main))) {
     const denominator = group.worker + group.main;
     const ratio = denominator > 0 ? (group.worker / denominator) * 100 : undefined;
-    const errorRate = group.worker + group.main + group.other > 0 ? (group.error / (group.worker + group.main + group.other)) * 100 : 0;
+    const attemptedCalls = Math.max(0, group.worker + group.main + group.other - group.rejected);
+    const errorRate = attemptedCalls > 0 ? (group.error / attemptedCalls) * 100 : 0;
     console.log(
       [
         group.category,
@@ -459,14 +461,17 @@ if (toolGroups.size > 0) {
         group.rejected
       ].join("\t")
     );
-    const errorGateCalls = group.worker + group.main + group.other;
+    const errorGateCalls = attemptedCalls;
     if (gateEnabled && errorGateCalls >= minToolErrorGateCalls && errorRate >= maxSingleToolErrorRate) {
       gateFailures.push(`${group.category}/${group.tool} error rate ${errorRate.toFixed(1)}% must stay below ${maxSingleToolErrorRate}%`);
     }
   }
 
   const workerToolCalls = toolTotals.worker;
-  const allToolCalls = [...toolGroups.values()].reduce((sum, group) => sum + group.worker + group.main + group.other, 0);
+  const allToolCalls = [...toolGroups.values()].reduce(
+    (sum, group) => sum + Math.max(0, group.worker + group.main + group.other - group.rejected),
+    0
+  );
   const allToolErrors = [...toolGroups.values()].reduce((sum, group) => sum + group.error, 0);
   const overallToolErrorRate = allToolCalls > 0 ? (allToolErrors / allToolCalls) * 100 : 0;
   const startCalls = [...toolGroups.values()]
@@ -481,8 +486,33 @@ if (toolGroups.size > 0) {
   console.log(`start_worker_call_ratio\t${startRatio.toFixed(1)}%`);
   if (startRatio > 30) {
     console.error(`[warn] start worker call ratio ${startRatio.toFixed(1)}% exceeds 30%; use read_pack/diff_digest/shell/search for non-implementation work`);
-    if (gateEnabled) gateFailures.push(`start worker call ratio ${startRatio.toFixed(1)}% exceeds 30%`);
   }
+}
+
+if (routingFile && fs.existsSync(routingFile)) {
+  const routingRows = [];
+  for (const line of fs.readFileSync(routingFile, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      const rowTime = Date.parse(String(row.ts || ""));
+      if (row.event === "routing_observation" && (sinceMs === undefined || (Number.isFinite(rowTime) && rowTime >= sinceMs))) {
+        routingRows.push(row);
+      }
+    } catch {
+      // Malformed observations are omitted; the guard reports telemetry completeness separately.
+    }
+  }
+  const coverage = routingCoverage(routingRows);
+  const pct = (value) => value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
+  console.log("");
+  console.log("Routing Coverage (scope=hook_observable)");
+  console.log(`eligible_total\t${coverage.eligible_total}`);
+  console.log(`worker_selected_rate\t${pct(coverage.worker_selected_rate)}`);
+  console.log(`effective_worker_coverage\t${pct(coverage.effective_worker_coverage)}`);
+  console.log(`main_direct_rate\t${pct(coverage.main_direct_rate)}`);
+  console.log(`routing_rejection_rate\t${pct(coverage.routing_rejection_rate)}`);
+  console.log(`unknown_rate\t${pct(coverage.unknown_rate)}`);
 }
 
 if (toolErrorSamples.length > 0) {
@@ -526,5 +556,5 @@ if (gateEnabled) {
     }
     process.exit(2);
   }
-  console.error("[gate] worker ratio gate passed");
+  console.error("[gate] worker health gate passed");
 }

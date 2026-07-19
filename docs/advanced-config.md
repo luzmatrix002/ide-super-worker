@@ -26,6 +26,25 @@ ADAPTER_PREFIX_CACHE=0
 WORKER_FALLBACK_WARN_EVERY=5
 ```
 
+## Routing Observation And Guard State
+
+Keep hook-observable routing events separate from gateway/tool metrics, and keep the
+atomic watchdog status outside the repository. The optional HMAC keys make local
+fingerprints authenticated; without them the hashes are correlation identifiers only.
+
+```env
+WORKER_ROUTING_EVENTS_FILE=D:/your/workspaces/.worker-routing-observations.jsonl
+WORKER_GUARD_STATUS_FILE=D:/your/workspaces/.worker-guard-status.json
+WORKER_ROUTING_HASH_KEY=
+WORKER_COMMAND_FINGERPRINT_KEY=
+```
+
+Until a real seven-day baseline exists, routing share, start share, latency, queue,
+retry, fallback, and circuit metrics are warnings/observations rather than health-gate
+failures. Canary failure, telemetry incompleteness, sampled execution-error rates,
+required audit evidence, and oversized receipts without artifact references remain
+eligible to fail the health gate.
+
 ## Outcome V1 Semantic Review
 
 `semantic_gate=required` performs one independent, cache-free review after executor, scope, and checks pass. Missing configuration, timeout, invalid JSON, risky verdicts, or truncated evidence produce `outcome.status="needs_evidence"`; they never silently count as accepted.

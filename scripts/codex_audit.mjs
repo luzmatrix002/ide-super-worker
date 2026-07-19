@@ -159,7 +159,7 @@ for (const row of toolRows) {
       ts: row.ts,
       category,
       tool: row.tool || "unknown",
-      error_class: row.error_class || "",
+      error_class: row.failure_class || row.tool_error_class || row.failure_kind || row.error_class || "",
       error_message: row.error_message || ""
     });
   }
@@ -176,7 +176,7 @@ if (mainToolRows.length > 0) {
   failures.push(`${mainToolRows.length} main-route tool_call row(s) were recorded`);
 }
 if (fallbackRows.length > 0 && fallbackRows.length / Math.max(1, upstreamRows.length) > 0.1) {
-  failures.push(`fallback ratio ${pct(fallbackRows.length, upstreamRows.length)} exceeds 10%`);
+  warnings.push(`fallback ratio ${pct(fallbackRows.length, upstreamRows.length)} exceeds 10%`);
 }
 if (startRows.length > 0 && startRows.length / Math.max(1, workerToolRows.length) > 0.3) {
   warnings.push(`start worker call ratio ${pct(startRows.length, workerToolRows.length)} exceeds 30%; use finer worker tools for non-implementation work`);

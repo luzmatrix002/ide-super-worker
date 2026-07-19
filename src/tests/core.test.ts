@@ -378,6 +378,24 @@ assert(statsRun.stdout.includes("fallback_ratio\t33.3%"));
 assert(statsRun.stdout.includes("escalate_calls\t1"));
 assert(statsRun.stderr.includes("[warn] fallback ratio 33.3% exceeds 10%"));
 
+const auditFallbackFile = path.join(root, "metrics-audit-fallback-observe.jsonl");
+fs.writeFileSync(
+  auditFallbackFile,
+  [
+    JSON.stringify({ ts: new Date().toISOString(), route: "primary", tool: "adapter", model: "test", prompt_tokens: 1, completion_tokens: 1 }),
+    JSON.stringify({ ts: new Date().toISOString(), route: "fallback", tool: "adapter", model: "test", prompt_tokens: 1, completion_tokens: 1 }),
+    JSON.stringify({ ts: new Date().toISOString(), event: "tool_call", route: "worker", tool: "search", category: "search", status: "ok" })
+  ].join("\n"),
+  "utf8"
+);
+const auditFallbackRun = spawnSync(
+  process.execPath,
+  ["scripts/codex_audit.mjs", "--required-categories=", auditFallbackFile],
+  { cwd: process.cwd(), encoding: "utf8" }
+);
+assert.equal(auditFallbackRun.status, 0, auditFallbackRun.stderr);
+assert(auditFallbackRun.stderr.includes("[warn] fallback ratio 50.0% exceeds 10%"));
+
 const statsGatePassFile = path.join(root, "metrics-gate-pass.jsonl");
 fs.writeFileSync(
   statsGatePassFile,
@@ -399,7 +417,7 @@ const statsGatePassRun = spawnSync(process.execPath, ["scripts/stats.mjs", "--ga
   }
 });
 assert.equal(statsGatePassRun.status, 0, statsGatePassRun.stderr);
-assert(statsGatePassRun.stderr.includes("[gate] worker ratio gate passed"));
+assert(statsGatePassRun.stderr.includes("[gate] worker health gate passed"));
 
 const statsGateRecentFile = path.join(root, "metrics-gate-recent.jsonl");
 fs.writeFileSync(
@@ -420,7 +438,7 @@ const statsGateRecentRun = spawnSync(process.execPath, ["scripts/stats.mjs", "--
   }
 });
 assert.equal(statsGateRecentRun.status, 0, statsGateRecentRun.stderr);
-assert(statsGateRecentRun.stderr.includes("[gate] worker ratio gate passed"));
+assert(statsGateRecentRun.stderr.includes("[gate] worker health gate passed"));
 
 const statsOverallErrorFile = path.join(root, "metrics-overall-error-fail.jsonl");
 fs.writeFileSync(
@@ -825,8 +843,9 @@ const statsGateFailRun = spawnSync(process.execPath, ["scripts/stats.mjs", "--ga
     WORKER_RATIO_REQUIRED_CATEGORIES: "context_pack"
   }
 });
-assert.equal(statsGateFailRun.status, 2);
-assert(statsGateFailRun.stderr.includes("[gate] context_pack worker ratio 50.0% below target 70%"));
+assert.equal(statsGateFailRun.status, 0, statsGateFailRun.stderr);
+assert(statsGateFailRun.stderr.includes("[warn] context_pack worker ratio 50.0% is below target 70%"));
+assert(!statsGateFailRun.stderr.includes("[gate] context_pack worker ratio"));
 
 const statsSinceFile = path.join(root, "metrics-since-last-wins.jsonl");
 fs.writeFileSync(
