@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash, createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { attachReceipt, saveArtifact } from "./artifacts.js";
@@ -25,6 +26,20 @@ const PACK_TOTAL_MAX_BYTES = 500_000;
 const PACK_MAX_FILES = 50;
 const COMMAND_OUTPUT_MAX = 200_000;
 const RECEIPT_ARTIFACT_MIN_BYTES = 32_000;
+
+function shellFamily(): string {
+  const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "sh";
+  return path.basename(executable).replace(/\.exe$/i, "").toLowerCase();
+}
+
+function commandFingerprint(command: string): string {
+  const normalized = command.replace(/\s+/g, " ").trim();
+  const secret = process.env.WORKER_COMMAND_FINGERPRINT_KEY;
+  const digest = secret
+    ? createHmac("sha256", secret).update(normalized).digest("hex")
+    : createHash("sha256").update(normalized).digest("hex");
+  return `${secret ? "hmac" : "correlation"}:${digest}`;
+}
 
 function truncateBytes(text: string, maxBytes: number, label: string): string {
   const safe = redactSecrets(text);
@@ -348,8 +363,10 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
   let executedCommand = command;
   let reroutedFrom: string | undefined;
   let rerouteReason: string | undefined;
+  const initialShellFamily = shellFamily();
+  const initialExitCode = commandResult.code;
   const initialStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
-  const initialFailureKind = assessShellFailure(command, initialStatus, commandResult.output);
+  const initialFailureKind = assessShellFailure(command, initialStatus, commandResult.output, commandResult.code);
   if (
     args.disable_shell_reroute !== true &&
     initialFailureKind === "shell_mismatch" &&
@@ -375,7 +392,8 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
   }
 
   const commandStatus: ShellCommandStatus = commandResult.timedOut ? "timeout" : commandResult.code === 0 ? "passed" : "failed";
-  const failureKind = assessShellFailure(command, commandStatus, commandResult.output);
+  const failureKind = assessShellFailure(command, commandStatus, commandResult.output, commandResult.code);
+  const metricStatus = shellToolDisposition(commandStatus, failureKind);
   const output = truncateBytes(commandResult.output, COMMAND_OUTPUT_MAX, "command output");
   const digestRequested = args.digest === true || commandResult.timedOut || commandResult.code !== 0;
   let digest: string | undefined;
@@ -416,6 +434,21 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     executed_command: executedCommand,
     status: commandStatus,
     exit_code: commandResult.code,
+    initial_shell_family: initialShellFamily,
+    final_shell_family: reroutedFrom ? "powershell" : initialShellFamily,
+    initial_exit_code: initialExitCode,
+    final_exit_code: commandResult.code,
+    reroute_outcome: reroutedFrom ? (commandResult.code === 0 && !commandResult.timedOut ? "succeeded" : "failed") : "none",
+    retry_count: reroutedFrom ? 1 : 0,
+    command_fingerprint: commandFingerprint(command),
+    worker_execution_result: metricStatus === "error" ? (commandResult.timedOut ? "timeout" : "infra_error") : "ok",
+    workload_result:
+      commandStatus === "passed"
+        ? "passed"
+        : failureKind === "test_failure" || failureKind === "typecheck_failure" || failureKind === "gate_failure"
+          ? "failed"
+          : "not_applicable",
+    ...(failureKind ? { failure_class: failureKind } : {}),
     signal: commandResult.signal,
     digest,
     output: responseOutput,
@@ -429,7 +462,7 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     output,
     artifactRefs: artifact ? [artifact.artifact_ref] : [],
     truncated: outputBytes > responseOutputBytes,
-    status: shellToolDisposition(commandStatus, failureKind)
+    status: metricStatus === "error" ? "error" : "ok"
   });
 }
 

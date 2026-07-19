@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +10,29 @@ const metrics = path.join(root, "metrics.jsonl");
 const targetsFile = path.join(root, "quality-targets.json");
 const sourceFile = path.join(root, "source.ts");
 fs.writeFileSync(sourceFile, "export const answer = 42;\n", "utf8");
+
+function assertConfigurationStatus(overrides: Record<string, string>, expected: string) {
+  const moduleUrl = new URL("../quality_mode.js", import.meta.url).href;
+  const script = `import { runHighQualityAnalyze } from ${JSON.stringify(moduleUrl)};
+const result = await runHighQualityAnalyze({ prompt: "probe", evidenceContent: "file: /probe.ts\\n1: export const probe = true;", evidenceTruncated: false });
+if (result.status !== ${JSON.stringify(expected)}) throw new Error(\`expected ${expected}, got \${result.status}\`);`;
+  const probe = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      SANDBOX_ROOT: root,
+      WORKER_LITE_CACHE_DIR: path.join(root, "probe-cache"),
+      WORKER_FANOUT_ENABLED: "1",
+      WORKER_LITE_MAX_CONCURRENCY: "3",
+      WORKER_GLOBAL_LITE_MAX: "3",
+      ...overrides
+    }
+  });
+  assert.equal(probe.status, 0, probe.stderr || probe.stdout);
+}
+
+assertConfigurationStatus({ WORKER_FANOUT_ENABLED: "0" }, "needs_direct_review");
+assertConfigurationStatus({ WORKER_LITE_MAX_CONCURRENCY: "2" }, "needs_direct_review");
 
 process.env.SANDBOX_ROOT = root;
 process.env.WORKER_FANOUT_ENABLED = "1";

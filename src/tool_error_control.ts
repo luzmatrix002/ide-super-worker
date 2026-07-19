@@ -99,6 +99,35 @@ const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 let activeEscalation: ToolErrorEscalation | undefined;
 let reviewTimer: NodeJS.Timeout | undefined;
 let nextReviewDueAt = 0;
+let debouncedReviewTimer: NodeJS.Timeout | undefined;
+let debouncedReviewRunning = false;
+let lastDebouncedReviewAt = 0;
+const ERROR_REVIEW_DEBOUNCE_MS = 30_000;
+const ERROR_REVIEW_MIN_INTERVAL_MS = 60_000;
+
+export function shouldScheduleToolErrorReview(status: MetricStatus): boolean {
+  return status === "error";
+}
+
+function scheduleDebouncedToolErrorReview(_observedAt = Date.now()): void {
+  if (debouncedReviewTimer) clearTimeout(debouncedReviewTimer);
+  const now = Date.now();
+  const delay = Math.max(ERROR_REVIEW_DEBOUNCE_MS, lastDebouncedReviewAt + ERROR_REVIEW_MIN_INTERVAL_MS - now);
+  debouncedReviewTimer = setTimeout(() => {
+    debouncedReviewTimer = undefined;
+    if (debouncedReviewRunning) return;
+    debouncedReviewRunning = true;
+    try {
+      runToolErrorReview({ now: new Date() });
+      lastDebouncedReviewAt = Date.now();
+    } catch (error) {
+      console.error(`[warn][tool-error-control] debounced review failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      debouncedReviewRunning = false;
+    }
+  }, delay);
+  debouncedReviewTimer.unref?.();
+}
 const toolControlEvents: ToolControlEvent[] = [];
 const openCircuits = new Map<string, ToolCircuit>();
 let circuitStateLoaded = false;
@@ -595,6 +624,7 @@ export function recordToolControlOutcome(
   extra: Record<string, unknown> = {},
   now = Date.now()
 ): { errorClass?: ToolErrorClass; circuitOpened?: boolean; circuitClosed?: boolean } {
+  if (status === "error") scheduleDebouncedToolErrorReview(now);
   pruneToolControl(now);
   if (!circuitEnabled()) return {};
   if (status === "rejected") return {};
@@ -858,6 +888,10 @@ export function resetToolControlState(options: { persist?: boolean } = {}): void
   circuitStateLoaded = false;
   lastCircuitStateSaveAt = 0;
   lastCircuitStateSnapshot = undefined;
+  if (debouncedReviewTimer) clearTimeout(debouncedReviewTimer);
+  debouncedReviewTimer = undefined;
+  debouncedReviewRunning = false;
+  lastDebouncedReviewAt = 0;
   if (options.persist !== false) persistToolCircuitState(Date.now(), { force: true, reason: "reset" });
 }
 
@@ -909,6 +943,14 @@ export function runToolErrorReview(options: { metricsFile?: string; now?: Date; 
 export function startToolErrorReviewLoop(): NodeJS.Timeout | undefined {
   if (reviewTimer || process.env.WORKER_TOOL_REVIEW_DISABLED === "1") return reviewTimer;
   loadToolCircuitState();
+  const startupReview = setTimeout(() => {
+    try {
+      runToolErrorReview({ now: new Date() });
+    } catch (error) {
+      console.error(`[warn][tool-error-control] startup review failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, 0);
+  startupReview.unref?.();
   const intervalMs = reviewIntervalMs();
   nextReviewDueAt = Date.now() + intervalMs;
   reviewTimer = setInterval(() => {
@@ -921,6 +963,8 @@ export function startToolErrorReviewLoop(): NodeJS.Timeout | undefined {
 }
 
 export function stopToolErrorReviewLoop(): void {
+  if (debouncedReviewTimer) clearTimeout(debouncedReviewTimer);
+  debouncedReviewTimer = undefined;
   if (!reviewTimer) return;
   clearInterval(reviewTimer);
   reviewTimer = undefined;

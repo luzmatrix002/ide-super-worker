@@ -6,11 +6,13 @@ export type ShellFailureKind =
   | "timeout"
   | "shell_mismatch"
   | "missing_command"
+  | "invalid_command"
   | "test_failure"
   | "typecheck_failure"
   | "gate_failure"
   | "dependency_missing"
   | "permission_denied"
+  | "search_no_match"
   | "unknown_failure";
 
 export interface CanonicalFailure {
@@ -34,7 +36,8 @@ export interface ShellFailureProjection {
 export function assessShellFailure(
   command: string,
   status: ShellCommandStatus,
-  output: string
+  output: string,
+  exitCode?: number | null
 ): ShellFailureKind | undefined {
   if (status === "passed") return undefined;
   const combined = `${command}\n${output}`;
@@ -57,6 +60,10 @@ export function assessShellFailure(
     return "test_failure";
   }
   if (/TS\d{4}:|TypeScript|\btsc\b/i.test(combined)) return "typecheck_failure";
+  if (/^rg(?:\.exe)?(?:\s|$)/i.test(command.trim()) && exitCode === 1 && !output.trim()) return "search_no_match";
+  if (/^rg(?:\.exe)?(?:\s|$)/i.test(command.trim()) && /unrecognized flag|invalid (?:option|value)/i.test(output)) {
+    return "invalid_command";
+  }
   if (/Cannot find module|MODULE_NOT_FOUND|npm ERR! missing/i.test(output)) return "dependency_missing";
   if (/not recognized|command not found|executable file not found|ENOENT/i.test(output)) return "missing_command";
   if (
@@ -78,6 +85,8 @@ export function shellFailureAction(kind: ShellFailureKind): string {
       return "Rewrite the command for the active shell, or wrap PowerShell syntax with powershell -NoProfile -Command before retrying.";
     case "missing_command":
       return "Verify the executable or package script exists in this workspace, then retry with the correct command.";
+    case "invalid_command":
+      return "Correct the command arguments, then retry the same command.";
     case "test_failure":
       return "Fix the failing test or application code using the compact digest and artifact output, then rerun the smallest failing command.";
     case "typecheck_failure":
@@ -88,6 +97,8 @@ export function shellFailureAction(kind: ShellFailureKind): string {
       return "Verify dependencies and module names; run install only when dependency installation is intended for this workspace.";
     case "permission_denied":
       return "Adjust the command path or permissions inside the sandbox; do not bypass permissions unless explicitly intended.";
+    case "search_no_match":
+      return "Treat ripgrep exit 1 with no output as an empty search result; refine the query only if a match is required.";
     default:
       return "Inspect the compact digest and artifact output, reduce to a focused repro, then retry the smallest corrective command.";
   }
@@ -112,12 +123,13 @@ export function buildShellFailureProjection(kind: ShellFailureKind): ShellFailur
   };
 }
 
-export function shellToolDisposition(
-  status: ShellCommandStatus,
-  failureKind?: ShellFailureKind
-): Exclude<ToolMetricStatus, "rejected"> {
+export function shellToolDisposition(status: ShellCommandStatus, failureKind?: ShellFailureKind): ToolMetricStatus {
   if (status === "passed") return "ok";
-  return failureKind === "test_failure" || failureKind === "typecheck_failure" || failureKind === "gate_failure"
+  if (failureKind === "invalid_command") return "rejected";
+  return failureKind === "test_failure" ||
+    failureKind === "typecheck_failure" ||
+    failureKind === "gate_failure" ||
+    failureKind === "search_no_match"
     ? "ok"
     : "error";
 }
@@ -149,7 +161,18 @@ export function classifyToolMetricPayload(
     ...(Array.isArray(outcome?.reason_codes) ? { outcome_reason_codes: outcome.reason_codes } : {}),
     ...(typeof outcome?.verification?.semantic === "string"
       ? { verification_semantic: outcome.verification.semantic }
-      : {})
+      : {}),
+    ...(typeof payload?.initial_shell_family === "string" ? { initial_shell_family: payload.initial_shell_family } : {}),
+    ...(typeof payload?.final_shell_family === "string" ? { final_shell_family: payload.final_shell_family } : {}),
+    ...(typeof payload?.initial_exit_code === "number" ? { initial_exit_code: payload.initial_exit_code } : {}),
+    ...(typeof payload?.final_exit_code === "number" ? { final_exit_code: payload.final_exit_code } : {}),
+    ...(typeof payload?.reroute_outcome === "string" ? { reroute_outcome: payload.reroute_outcome } : {}),
+    ...(typeof payload?.retry_count === "number" ? { retry_count: payload.retry_count } : {}),
+    ...(typeof payload?.command_fingerprint === "string" ? { command_fingerprint: payload.command_fingerprint } : {}),
+    ...(typeof payload?.worker_execution_result === "string" ? { worker_execution_result: payload.worker_execution_result } : {}),
+    ...(typeof payload?.workload_result === "string" ? { workload_result: payload.workload_result } : {}),
+    ...(typeof payload?.failure_class === "string" ? { failure_class: payload.failure_class } : {}),
+    ...(Array.isArray(receipt?.artifact_refs) ? { artifact_refs: receipt.artifact_refs } : {})
   };
   const payloadStatus = typeof payload.status === "string" ? payload.status : undefined;
   const jobStatus = typeof payload.job_status === "string" ? payload.job_status : payloadStatus;
@@ -168,6 +191,7 @@ export function classifyToolMetricPayload(
         command_status: payloadStatus,
         exit_code: payload.exit_code,
         failure_kind: failureKind,
+        failure_class: failureKind,
         required_action: payload.failure?.action ?? payload.required_action,
         repair_route: "worker_local"
       }

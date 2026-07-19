@@ -515,9 +515,9 @@ async function runReviewer(
 
 async function runHighQuality(input: HighQualityInput): Promise<QualityResultV1> {
   const startedAt = Date.now();
-  if (!FANOUT_ENABLED) return emptyResult(input.kind, "failed", ["quality_fanout_disabled"]);
+  if (!FANOUT_ENABLED) return emptyResult(input.kind, "needs_direct_review", ["quality_fanout_disabled"]);
   if (LITE_MAX_CONCURRENCY < 3 || GLOBAL_LITE_MAX < 3) {
-    return emptyResult(input.kind, "failed", ["quality_concurrency_below_3"]);
+    return emptyResult(input.kind, "needs_direct_review", ["quality_concurrency_below_3"]);
   }
   if (input.evidenceTruncated || /\.\.\.\[file truncated at \d+ bytes\]/.test(input.evidenceContent)) {
     return emptyResult(input.kind, "needs_direct_review", ["evidence_truncated"]);

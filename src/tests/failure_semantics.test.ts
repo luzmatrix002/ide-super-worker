@@ -29,6 +29,7 @@ const failureSemantics = await import("../failure_semantics.js");
 const workerTools = await import("../worker_tools.js");
 const server = await import("../server.js");
 const toolErrorControl = await import("../tool_error_control.js");
+const lite = await import("../lite.js");
 
 assert.equal(
   failureSemantics.assessShellFailure(
@@ -49,6 +50,35 @@ assert.equal(
 );
 assert.equal(failureSemantics.assessShellFailure("tool", "timeout", ""), "timeout");
 assert.equal(failureSemantics.assessShellFailure("tool", "failed", "EACCES permission denied"), "permission_denied");
+assert.equal(
+  failureSemantics.assessShellFailure("rg -n missing-symbol src --glob *.test.ts", "failed", "", 1),
+  "search_no_match",
+  "ripgrep exit 1 with no output means a valid empty search, not an unknown tool failure"
+);
+assert.equal(
+  failureSemantics.assessShellFailure("rg --definitely-invalid-option", "failed", "", 2),
+  "unknown_failure",
+  "an empty ripgrep failure without exit 1 must not be treated as an empty search"
+);
+assert.equal(
+  failureSemantics.assessShellFailure("rg --definitely-invalid-option", "failed", "rg: unrecognized flag --definitely-invalid-option", 2),
+  "invalid_command",
+  "invalid ripgrep arguments are caller input, not a worker fault"
+);
+assert.equal(
+  failureSemantics.shellToolDisposition("failed", "invalid_command"),
+  "rejected",
+  "invalid commands must not enter the tool-error denominator"
+);
+assert.equal(
+  failureSemantics.classifyToolMetricPayload({
+    status: "failed",
+    failure_kind: "invalid_command",
+    receipt: { route: "worker", tool: "shell", category: "command_digest", status: "ok" }
+  }).status,
+  "rejected",
+  "the receipt must preserve invalid commands as rejected in metrics"
+);
 assert.equal(failureSemantics.assessShellFailure("tool", "failed", "unexpected process crash"), "unknown_failure");
 assert.equal(
   failureSemantics.assessShellFailure("tool", "failed", "[fail] synthetic gate failure"),
@@ -114,6 +144,14 @@ const testMetric = server.workerMetricStatusFromPayload(testResult);
 assert.equal(testMetric.status, "ok");
 assert.equal(testMetric.extra.command_status, "failed");
 assert.equal(testMetric.extra.failure_kind, "test_failure");
+assert.equal(testMetric.extra.failure_class, "test_failure");
+assert.equal(testMetric.extra.worker_execution_result, "ok");
+assert.equal(testMetric.extra.workload_result, "failed");
+assert.equal(testMetric.extra.initial_shell_family, testResult.initial_shell_family);
+assert.equal(testMetric.extra.final_exit_code, 1);
+assert.equal(testMetric.extra.reroute_outcome, "none");
+assert.match(testMetric.extra.command_fingerprint as string, /^(?:hmac|correlation):[0-9a-f]{64}$/);
+assert.deepEqual(testMetric.extra.artifact_refs, testResult.receipt.artifact_refs);
 
 const typecheckResult = (await workerTools.runWorkerShell({
   cwd: project,
@@ -156,6 +194,11 @@ assert.equal(timeoutResult.status, "timeout");
 assert.equal(timeoutResult.failure.kind, "timeout");
 assert.equal(timeoutResult.receipt.status, "error");
 assert.equal(server.workerMetricStatusFromPayload(timeoutResult).status, "error");
+assert.equal(server.workerMetricStatusFromPayload(timeoutResult).extra.worker_execution_result, "timeout");
+assert.equal(server.workerMetricStatusFromPayload(timeoutResult).extra.workload_result, "not_applicable");
+assert.equal(toolErrorControl.shouldScheduleToolErrorReview("error"), true);
+assert.equal(toolErrorControl.shouldScheduleToolErrorReview("ok"), false);
+assert.equal(toolErrorControl.shouldScheduleToolErrorReview("rejected"), false);
 
 const rejectedMetric = server.workerMetricStatusFromPayload({
   status: "rejected",
@@ -198,6 +241,20 @@ toolErrorControl.recordToolControlOutcome("shell", "command_digest", "ok", {
 });
 assert.equal(toolErrorControl.getToolControlDecision("shell", "command_digest"), undefined);
 toolErrorControl.resetToolControlState();
+
+const relativeFixture = path.join(project, "relative-read.txt");
+fs.writeFileSync(relativeFixture, "relative sandbox read", "utf8");
+const originalCwd = process.cwd();
+process.chdir(path.dirname(root));
+try {
+  assert.equal(
+    lite.readSandboxedFile("project/relative-read.txt"),
+    "relative sandbox read",
+    "relative files must resolve from SANDBOX_ROOT rather than the worker process cwd"
+  );
+} finally {
+  process.chdir(originalCwd);
+}
 
 globalThis.fetch = originalFetch;
 console.log("failure semantics tests passed");

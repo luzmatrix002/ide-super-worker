@@ -106,7 +106,7 @@ function liteCacheDir(): string | undefined {
 export function readSandboxedFile(input: string): string {
   let real: string;
   try {
-    real = fs.realpathSync.native(path.resolve(input));
+    real = fs.realpathSync.native(path.isAbsolute(input) ? input : path.resolve(SANDBOX_ROOT, input));
   } catch {
     throw new Error(`[Security] file does not exist or cannot be accessed: ${input}`);
   }

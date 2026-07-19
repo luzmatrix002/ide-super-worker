@@ -1986,6 +1986,15 @@ export function createCodexWorkerServer(): Server {
               evidenceTruncated: evidence.truncated
             });
             metricExtra = { quality_mode: "high", quality_status: result.status, quality_reason_codes: result.reason_codes };
+            if (result.reason_codes.some((code) => code === "quality_fanout_disabled" || code === "quality_concurrency_below_3")) {
+              return reject(
+                "analyze",
+                "analysis",
+                "quality_mode=high prerequisites are not configured; set WORKER_FANOUT_ENABLED=1, WORKER_LITE_MAX_CONCURRENCY>=3, and WORKER_GLOBAL_LITE_MAX>=3, then retry",
+                "Either enable the quality.v1 prerequisites, or omit quality_mode to use the available standard analysis lane.",
+                ["analyze"]
+              );
+            }
             return okJson(result);
           } catch (error: any) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -2093,6 +2102,15 @@ export function createCodexWorkerServer(): Server {
               evidenceTruncated: sharedEvidence.truncated
             });
             metricExtra = { quality_mode: "high", quality_status: result.status, quality_reason_codes: result.reason_codes };
+            if (result.reason_codes.some((code) => code === "quality_fanout_disabled" || code === "quality_concurrency_below_3")) {
+              return reject(
+                "review",
+                "review",
+                "quality_mode=high prerequisites are not configured; set WORKER_FANOUT_ENABLED=1, WORKER_LITE_MAX_CONCURRENCY>=3, and WORKER_GLOBAL_LITE_MAX>=3, then retry",
+                "Either enable the quality.v1 prerequisites, or omit quality_mode to use the available standard review lane.",
+                ["review"]
+              );
+            }
             return okJson(result);
           } catch (error: any) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -2301,6 +2319,7 @@ export function createCodexWorkerServer(): Server {
         appendToolMetric(name, category, metricStatus, {
           ...reliabilityExtra,
           ...metricExtra,
+          ...(controlOutcome.errorClass ? { failure_class: controlOutcome.errorClass } : {}),
           ...(controlOutcome.errorClass ? { tool_error_class: controlOutcome.errorClass } : {}),
           ...(controlOutcome.circuitOpened ? { circuit_opened: true } : {}),
           ...(controlOutcome.circuitClosed ? { circuit_closed: true } : {}),
