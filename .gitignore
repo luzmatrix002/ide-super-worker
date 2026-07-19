@@ -17,6 +17,8 @@ latest
 worker-quality-targets*.json
 quality-targets.local.json
 .playwright-cli/
+.fix-backups/
+/codex-guard-status.json
 优化执行手册_降本增效.md
 部署手册_低成本Codex省额度方案.md
 
