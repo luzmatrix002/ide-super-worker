@@ -2,6 +2,9 @@ import assert from "node:assert";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 
+// Includes cold Node/module startup on Windows, not only the configured idle window.
+const EXIT_TIMEOUT_MS = 5_000;
+
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`worker did not exit within ${timeoutMs}ms`)), timeoutMs);
@@ -28,7 +31,7 @@ function spawnWorker(idleExitMs: string): ChildProcess {
 
 const child = spawnWorker("100");
 try {
-  const result = await waitForExit(child, 2_000);
+  const result = await waitForExit(child, EXIT_TIMEOUT_MS);
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
 } finally {
@@ -43,7 +46,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(disabledChild.exitCode, null, "WORKER_IDLE_EXIT_MS=0 must keep the server available");
   disabledChild.stdin?.end();
-  const result = await waitForExit(disabledChild, 2_000);
+  const result = await waitForExit(disabledChild, EXIT_TIMEOUT_MS);
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
 } finally {

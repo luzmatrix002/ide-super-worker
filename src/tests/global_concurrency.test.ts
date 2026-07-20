@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CrossProcessSemaphore, GlobalConcurrencyBusyError } from "../global_concurrency.js";
 
 const self = fileURLToPath(import.meta.url);
+const EVENT_TIMEOUT_MS = 10_000;
 
 if (process.argv[2] === "child") {
   const [, , , root, label, holdRaw, queueRaw] = process.argv;
@@ -58,6 +59,7 @@ if (process.argv[2] === "child") {
   }
 
   function waitForExit(child: ChildProcess): Promise<number | null> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(child.exitCode);
     return new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code));
@@ -65,7 +67,7 @@ if (process.argv[2] === "child") {
   }
 
   async function waitForEnter(run: ReturnType<typeof startChild>): Promise<void> {
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + EVENT_TIMEOUT_MS;
     while (!run.events.some((event) => event.event === "enter")) {
       if (run.child.exitCode !== null) throw new Error(`child exited before enter: ${run.stderr()}`);
       if (Date.now() >= deadline) throw new Error(`timed out waiting for child enter: ${run.stderr()}`);
@@ -75,7 +77,7 @@ if (process.argv[2] === "child") {
 
   async function waitForQueued(root: string, count: number): Promise<void> {
     const queueDir = path.join(root, "test", "queue");
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + EVENT_TIMEOUT_MS;
     while (true) {
       const queued = fs.existsSync(queueDir) ? fs.readdirSync(queueDir).filter((name) => name.endsWith(".json")).length : 0;
       if (queued >= count) return;
@@ -103,7 +105,9 @@ if (process.argv[2] === "child") {
     assert.ok(third.events[0].time >= second.events.find((event) => event.event === "exit")!.time);
 
     const overflowRoot = fs.mkdtempSync(path.join(os.tmpdir(), "global-concurrency-overflow-"));
-    const active = startChild(overflowRoot, "active", 1_500, 1);
+    // Keep the lease longer than a cold Windows child startup so the queued
+    // ticket is present before asserting that the queue is full.
+    const active = startChild(overflowRoot, "active", 5_000, 1);
     await waitForEnter(active);
     const queued = startChild(overflowRoot, "queued", 20, 1);
     await waitForQueued(overflowRoot, 1);
