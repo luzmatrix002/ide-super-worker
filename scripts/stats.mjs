@@ -539,9 +539,11 @@ if (gateEnabled) {
   const diffDigestRedTeamCalls = [...toolGroups.values()]
     .filter((group) => group.tool === "diff_digest")
     .reduce((sum, group) => sum + group.redTeam, 0);
+  const liteLlmDisabled = /^(0|false|no|off)$/i.test(String(process.env.WORKER_LITE_LLM ?? "").trim());
+  console.log(`lite_llm_disabled\t${liteLlmDisabled}`);
   const redTeamRatio = diffDigestWorkerCalls > 0 ? (diffDigestRedTeamCalls / diffDigestWorkerCalls) * 100 : 0;
   console.log(`diff_digest_red_team_ratio\t${redTeamRatio.toFixed(1)}%`);
-  if (diffDigestWorkerCalls > 0 && redTeamRatio < redTeamMinRatio) {
+  if (!liteLlmDisabled && diffDigestWorkerCalls > 0 && redTeamRatio < redTeamMinRatio) {
     gateFailures.push(`diff_digest red-team ratio ${redTeamRatio.toFixed(1)}% below target ${redTeamMinRatio}%`);
   }
   for (const sample of receiptTotals.largeWithoutArtifact) {

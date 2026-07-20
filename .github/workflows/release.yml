@@ -1,0 +1,54 @@
+name: Release Windows installer
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build installer
+        shell: powershell
+        run: installer/windows/build-installer.ps1 -OutputDir output/installer
+      # Configure these GitHub Environment secrets before enabling a release:
+      # DIGICERT_KEYLOCKER_KEYPAIR_ALIAS, DIGICERT_KEYLOCKER_CERTIFICATE_ALIAS,
+      # DIGICERT_KEYLOCKER_CLIENT_CERTIFICATE, DIGICERT_KEYLOCKER_CLIENT_CERTIFICATE_PASSWORD,
+      # DIGICERT_KEYLOCKER_API_KEY.
+      - name: Sign installer with DigiCert KeyLocker
+        uses: digicert/ssm-code-signing@v1
+        with:
+          command: sign
+          path: output/installer/IDE-Super-Worker-Setup.exe
+          keypair_alias: ${{ secrets.DIGICERT_KEYLOCKER_KEYPAIR_ALIAS }}
+          certificate_alias: ${{ secrets.DIGICERT_KEYLOCKER_CERTIFICATE_ALIAS }}
+          client_certificate: ${{ secrets.DIGICERT_KEYLOCKER_CLIENT_CERTIFICATE }}
+          client_certificate_password: ${{ secrets.DIGICERT_KEYLOCKER_CLIENT_CERTIFICATE_PASSWORD }}
+          api_key: ${{ secrets.DIGICERT_KEYLOCKER_API_KEY }}
+      - name: Verify signature and publish checksums
+        shell: powershell
+        run: |
+          $file = Get-Item output/installer/IDE-Super-Worker-Setup.exe
+          $signature = Get-AuthenticodeSignature $file.FullName
+          if ($signature.Status -ne 'Valid') { throw "Invalid signature: $($signature.Status)" }
+          Get-ChildItem output/installer -File | Where-Object Extension -in '.exe','.zip' | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)" } | Set-Content output/installer/SHA256SUMS
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            output/installer/IDE-Super-Worker-Setup.exe
+            output/installer/IDE-Super-Worker-Offline.zip
+            output/installer/SHA256SUMS

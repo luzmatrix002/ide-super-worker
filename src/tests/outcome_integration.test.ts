@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { SANDBOX_ROOT } from "../config.js";
 import { createJobState, jobs, setTerminalStatus } from "../jobs.js";
 import { buildReliabilityProfile } from "../reliability.js";
 import {
@@ -16,6 +17,7 @@ import {
   preflightStartRejection,
   publicJob,
   toolFailureJson,
+  workerMetricStatusFromPayload,
   type JobEvaluation
 } from "../server.js";
 import type { SemanticReviewResult } from "../semantic_review.js";
@@ -695,6 +697,60 @@ const legacyPayloadMatrix: Record<string, any> = {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const expiredGetResponse = await client.callTool({ name: "get", arguments: { job_id: "expired-job-id" } });
+    assert.notEqual((expiredGetResponse as { isError?: boolean }).isError, true);
+    const expiredGetPayload = parsedToolPayload(expiredGetResponse);
+    assert.equal(expiredGetPayload.status, "ok");
+    assert.equal(expiredGetPayload.degraded, true);
+    assert.equal(expiredGetPayload.degradation_reason, "job_not_found_or_expired");
+    assert.equal(workerMetricStatusFromPayload(expiredGetPayload).status, "ok");
+
+    const missingSearchPath = path.join(SANDBOX_ROOT, "__missing-search-path__");
+    const allMissingSearchResponse = await client.callTool({
+      name: "search",
+      arguments: { pattern: "needle", dirs: [missingSearchPath] }
+    });
+    const allMissingSearchPayload = parsedToolPayload(allMissingSearchResponse);
+    assert.equal(allMissingSearchPayload.status, undefined);
+    assert.equal(allMissingSearchPayload.degraded, true);
+    assert.match(allMissingSearchPayload.degradation_reason, /all search dirs missing or inaccessible/);
+
+    const partialMissingSearchResponse = await client.callTool({
+      name: "search",
+      arguments: { pattern: "ide-super-worker", dirs: [missingSearchPath, path.join(cwd, "package.json")] }
+    });
+    const partialMissingSearchPayload = parsedToolPayload(partialMissingSearchResponse);
+    assert(partialMissingSearchPayload.results.some((line: string) => line.includes("ide-super-worker")));
+    assert.equal(partialMissingSearchPayload.degraded, true);
+    assert.match(partialMissingSearchPayload.degradation_reason, /some search dirs missing or inaccessible/);
+
+    const noMatchesSearchResponse = await client.callTool({
+      name: "search",
+      arguments: { pattern: "__codex_no_match_regression__", dirs: [path.join(cwd, "package.json")] }
+    });
+    const noMatchesSearchPayload = parsedToolPayload(noMatchesSearchResponse);
+    assert.equal(noMatchesSearchPayload.count, 0);
+    assert.equal(noMatchesSearchPayload.degraded, true);
+    assert.equal(noMatchesSearchPayload.degradation_reason, "no_matches");
+
+    const missingPathStartResponse = await client.callTool({
+      name: "start",
+      arguments: { prompt: "missing path preflight", allowed_dirs: [missingSearchPath] }
+    });
+    const missingPathStartPayload = parsedToolPayload(missingPathStartResponse);
+    assert.equal(missingPathStartPayload.status, "rejected");
+    assert.deepEqual(missingPathStartPayload.outcome.reason_codes, ["missing_path"]);
+    assert.equal(missingPathStartPayload.failure_class, "missing_path");
+
+    const missingModelStartResponse = await client.callTool({
+      name: "start",
+      arguments: { prompt: "missing model preflight", allowed_dirs: [cwd], model: "   " }
+    });
+    const missingModelStartPayload = parsedToolPayload(missingModelStartResponse);
+    assert.equal(missingModelStartPayload.status, "rejected");
+    assert.deepEqual(missingModelStartPayload.outcome.reason_codes, ["missing_command"]);
+    assert.equal(missingModelStartPayload.failure_class, "missing_command");
+
     const getResponse = await client.callTool({ name: "get", arguments: { job_id: getJob.id } });
     assert.notEqual((getResponse as { isError?: boolean }).isError, true);
     const getPayload = parsedToolPayload(getResponse);

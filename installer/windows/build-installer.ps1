@@ -31,6 +31,12 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repoRoot 'dist') -Destination $payloadRoot -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot 'node_modules') -Destination $payloadRoot -Recurse -Force
+Push-Location $payloadRoot
+try {
+  & npm prune --omit=dev --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw "npm prune --omit=dev failed with exit code $LASTEXITCODE." }
+} finally { Pop-Location }
 foreach ($file in @('package.json', 'package-lock.json', 'LICENSE', '.env.example')) {
   Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination (Join-Path $payloadRoot $file) -Force
 }
@@ -120,8 +126,11 @@ if ($iexpressExitCode -ne 0 -or -not $installerReady) {
   throw "IExpress failed to create installer in temporary build directory: $workRoot"
 }
 Copy-Item -LiteralPath $temporaryExe -Destination $targetExe -Force
+$portableZip = Join-Path $OutputDir 'IDE-Super-Worker-Offline.zip'
+Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portableZip -CompressionLevel Optimal -Force
 Remove-Item -LiteralPath $workRoot -Recurse -Force
 
 $sizeMiB = [math]::Round((Get-Item -LiteralPath $targetExe).Length / 1MB, 2)
 Write-Host "[installer] Created: $targetExe ($sizeMiB MiB)"
+Write-Host "[installer] Created: $portableZip (use install-mcp.ps1 -EnvFile for offline deployment)"
 Write-Host '[installer] Secret-like preset values were blanked. Review non-secret URLs and paths before distributing this EXE.'

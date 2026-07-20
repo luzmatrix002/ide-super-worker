@@ -7,6 +7,7 @@ param(
   [string]$Model,
   [string]$ClaudeCodeModel,
   [string]$ApiKey,
+  [string]$EnvFile,
   [string]$PresetPath,
   [string]$CodexConfigPath = (Join-Path $HOME '.codex\config.toml'),
   [switch]$NonInteractive,
@@ -149,8 +150,25 @@ function Show-SetupDialog {
   }
 }
 
-if (-not $PresetPath) { $PresetPath = Join-Path $SourceDir 'preset.env' }
-$preset = Read-DotEnv -Path $PresetPath
+$preset = [ordered]@{}
+$requiredEnvFileVariables = @('ONEAPI_BASE_URL', 'ONEAPI_API_KEY', 'CLAUDE_MODEL', 'CLAUDE_CODE_MODEL', 'SANDBOX_ROOT')
+if ($PresetPath) {
+  $preset = Read-DotEnv -Path $PresetPath
+} elseif (-not $EnvFile) {
+  $preset = Read-DotEnv -Path (Join-Path $SourceDir 'preset.env')
+}
+if ($EnvFile) {
+  if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { throw "EnvFile was not found: $EnvFile" }
+  $importedEnv = Read-DotEnv -Path $EnvFile
+  foreach ($entry in $importedEnv.GetEnumerator()) {
+    if ($entry.Key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "EnvFile contains an invalid variable name: $($entry.Key)" }
+    Assert-SingleLine -Name $entry.Key -Value ([string]$entry.Value)
+    $preset[$entry.Key] = [string]$entry.Value
+  }
+  foreach ($name in $requiredEnvFileVariables) {
+    if (-not $preset.Contains($name) -or [string]::IsNullOrWhiteSpace([string]$preset[$name])) { throw "EnvFile must define $name." }
+  }
+}
 if (-not $preset.Contains('SANDBOX_ROOT')) { $preset['SANDBOX_ROOT'] = 'D:/workspaces' }
 if (-not $preset.Contains('ONEAPI_BASE_URL')) { $preset['ONEAPI_BASE_URL'] = 'https://your-gateway.example.com/v1' }
 if (-not $preset.Contains('CLAUDE_MODEL')) { $preset['CLAUDE_MODEL'] = 'deepseek-v4-flash' }
@@ -163,13 +181,14 @@ if (-not $NonInteractive) {
   $GatewayUrl = $selection.GatewayUrl
   $Model = $selection.Model
   $ClaudeCodeModel = $selection.ClaudeCodeModel
-  $ApiKey = $selection.ApiKey
+  if ($selection.ApiKey) { $ApiKey = $selection.ApiKey }
 }
 
 if (-not $SandboxRoot) { $SandboxRoot = [string]$preset['SANDBOX_ROOT'] }
 if (-not $GatewayUrl) { $GatewayUrl = [string]$preset['ONEAPI_BASE_URL'] }
 if (-not $Model) { $Model = [string]$preset['CLAUDE_MODEL'] }
 if (-not $ClaudeCodeModel) { $ClaudeCodeModel = [string]$preset['CLAUDE_CODE_MODEL'] }
+if (-not $ApiKey -and $preset.Contains('ONEAPI_API_KEY')) { $ApiKey = [string]$preset['ONEAPI_API_KEY'] }
 foreach ($entry in @{ InstallDir=$InstallDir; SandboxRoot=$SandboxRoot; GatewayUrl=$GatewayUrl; Model=$Model; ClaudeCodeModel=$ClaudeCodeModel }.GetEnumerator()) {
   if (-not [string]$entry.Value) { throw "$($entry.Key) is required." }
   Assert-SingleLine -Name $entry.Key -Value ([string]$entry.Value)
@@ -216,12 +235,14 @@ $envLines = foreach ($key in $installedEnv.Keys) {
 
 if (-not $SkipDependencyInstall) {
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js 20+ is required but was not found in PATH.' }
-  if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is required but was not found in PATH.' }
-  Push-Location $InstallDir
-  try {
-    & npm install --omit=dev --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
-  } finally { Pop-Location }
+  if (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'node_modules') -PathType Container)) {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is required when bundled dependencies are unavailable.' }
+    Push-Location $InstallDir
+    try {
+      & npm install --omit=dev --no-audit --no-fund
+      if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
+    } finally { Pop-Location }
+  }
 }
 
 $configDir = Split-Path -Parent $CodexConfigPath

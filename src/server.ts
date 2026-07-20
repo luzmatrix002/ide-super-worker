@@ -15,6 +15,7 @@ import {
   FANOUT_ENABLED,
   FAILURE_DIGEST_ENABLED,
   INCLUDE_DIFF_DEFAULT,
+  LITE_LLM_ENABLED,
   MAX_REVISE_PASSES,
   MAX_RUNNING_JOBS,
   REASONING_ENABLED,
@@ -89,6 +90,7 @@ import {
   applyMechanicalEdits,
   buildContextPack,
   digestDiff,
+  digestStoredDiff,
   draftFromChanges,
   gitHistory,
   runWorkerShell
@@ -241,10 +243,12 @@ function rejectedJson(
   reason: string,
   requiredAction: string,
   alternatives: string[] = ["start"],
-  outcome: OutcomeV1 = createRejectedOutcome("request_rejected", true)
+  outcome: OutcomeV1 = createRejectedOutcome("request_rejected", true),
+  failureClass?: string
 ) {
   const legacyPayload = {
     status: "rejected",
+    ...(failureClass ? { failure_class: failureClass } : {}),
     reason,
     required_action: requiredAction,
     fallback: {
@@ -259,7 +263,7 @@ function rejectedJson(
       tool,
       category,
       input,
-      output: { status: "rejected", reason, required_action: requiredAction }
+      output: { status: "rejected", reason, required_action: requiredAction, failure_class: failureClass }
     }
   );
   return { contract_version: OUTCOME_CONTRACT_VERSION, outcome, ...payload };
@@ -533,7 +537,9 @@ export function preflightStartRejection(args: Record<string, unknown>) {
             args,
             `allowed_dirs path does not exist: ${dir}`,
             "Correct the allowed_dirs path inside SANDBOX_ROOT before retrying start.",
-            ["read_pack", "diff_digest", "shell"]
+            ["read_pack", "diff_digest", "shell"],
+            createRejectedOutcome("missing_path", true),
+            "missing_path"
           );
         }
       } catch {
@@ -543,7 +549,9 @@ export function preflightStartRejection(args: Record<string, unknown>) {
           args,
           `allowed_dirs path cannot be accessed: ${dir}`,
           "Verify the path exists and is readable inside SANDBOX_ROOT before retrying start.",
-          ["read_pack", "diff_digest", "shell"]
+          ["read_pack", "diff_digest", "shell"],
+          createRejectedOutcome("missing_path", true),
+          "missing_path"
         );
       }
     }
@@ -552,15 +560,16 @@ export function preflightStartRejection(args: Record<string, unknown>) {
   // P4: Verify model field if provided — empty model causes claude spawn failure
   // that gets classified as unknown_failure.
   if (args.model !== undefined && args.model !== null) {
-    const model = String(args.model).trim();
-    if (!model) {
+    if (typeof args.model !== "string" || !args.model.trim()) {
       return rejectedJson(
         "start",
         "implementation",
         args,
         "model must be a non-empty string when provided",
         "Provide a valid model name, or omit the model field to use the default.",
-        ["read_pack", "diff_digest", "shell"]
+        ["read_pack", "diff_digest", "shell"],
+        createRejectedOutcome("missing_command", true),
+        "missing_command"
       );
     }
   }
@@ -620,11 +629,30 @@ export function validateSearchPaths(value: unknown): string[] {
     if (!item.trim()) throw new Error("[Security] search dirs must contain non-empty paths");
     if (item.includes("\0")) throw new Error("[Security] NUL byte in search path is rejected");
     const absolute = path.isAbsolute(item) ? path.resolve(item) : path.resolve(SANDBOX_ROOT, item);
+    if (!isInsideDirectory(absolute, SANDBOX_ROOT)) {
+      throw new Error(`[Security] search path escapes SANDBOX_ROOT: ${absolute}`);
+    }
+    if (absolute === path.parse(absolute).root && process.env.WORKER_ALLOW_FILESYSTEM_ROOT !== "1") {
+      throw new Error("[Security] filesystem-root searches are disabled; pass an absolute project path");
+    }
     let real: string;
     try {
       real = fs.realpathSync.native(absolute);
     } catch {
-      throw new Error(`[Security] search path does not exist or cannot be accessed: ${absolute}`);
+      let ancestor = path.dirname(absolute);
+      while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) {
+        ancestor = path.dirname(ancestor);
+      }
+      let realAncestor: string;
+      try {
+        realAncestor = fs.realpathSync.native(ancestor);
+      } catch {
+        throw new Error(`[Security] search path cannot be validated inside SANDBOX_ROOT: ${absolute}`);
+      }
+      if (!isInsideDirectory(realAncestor, SANDBOX_ROOT)) {
+        throw new Error(`[Security] search path escapes SANDBOX_ROOT: ${absolute} (ancestor real: ${realAncestor})`);
+      }
+      return absolute;
     }
     const stat = fs.statSync(real);
     if (!stat.isDirectory() && !stat.isFile()) {
@@ -633,7 +661,7 @@ export function validateSearchPaths(value: unknown): string[] {
     if (!isInsideDirectory(real, SANDBOX_ROOT)) {
       throw new Error(`[Security] search path escapes SANDBOX_ROOT: ${absolute} (real: ${real})`);
     }
-    if (path.resolve(real) === path.parse(real).root && process.env.WORKER_ALLOW_FILESYSTEM_ROOT !== "1") {
+    if (real === path.parse(real).root && process.env.WORKER_ALLOW_FILESYSTEM_ROOT !== "1") {
       throw new Error("[Security] filesystem-root searches are disabled; pass an absolute project path");
     }
     return real;
@@ -691,6 +719,19 @@ function reviewDiffForFiles(files: string[]): { diff?: string; files: string[] }
   return { diff: diff.stdout || "", files: diff.stdout ? [] : validated };
 }
 
+function liteDisabledMarker() {
+  return {
+    status: "ok",
+    llm: "disabled",
+    evidence_only: true,
+    note: "WORKER_LITE_LLM=0: no cheap-LLM judgment was applied. This payload is raw deterministic evidence; conclusions must be drawn by the caller."
+  };
+}
+
+function storedJobDiffDigest(job: JobState) {
+  return digestStoredDiff(job.result.diff || "", job.result.changed_files || []);
+}
+
 async function degradedByToolControl(
   tool: string,
   category: WorkerCategory,
@@ -716,7 +757,7 @@ async function degradedByToolControl(
     const job = jobId ? jobs.get(jobId) : undefined;
     const files = Array.isArray(args.files) ? args.files.map(String) : [];
     if (job) {
-      const diffDigest = await digestDiff({ cwd: job.cwd, max_diff_bytes: typeof args.max_diff_bytes === "number" ? args.max_diff_bytes : 40_000 });
+      const diffDigest = storedJobDiffDigest(job);
       const payload = {
         ...base,
         fallback_used: "diff_digest",
@@ -725,15 +766,16 @@ async function degradedByToolControl(
         job_status: job.status,
         changed_files: job.result.changed_files || [],
         checks: job.result.checks || [],
-        diff_digest: {
-          changed_files: diffDigest.changed_files,
-          files: diffDigest.files,
-          high_risk_files: diffDigest.high_risk_files,
-          risk: diffDigest.risk,
-          hunk_summaries: diffDigest.hunk_summaries
-        }
+        diff_digest: diffDigest.summary
       };
-      return attachReceipt(payload, { tool, category, input: args, output: payload });
+      return attachReceipt(payload, {
+        tool,
+        category,
+        input: args,
+        output: job.result.diff || diffDigest.summary,
+        artifactRefs: diffDigest.artifactRefs,
+        truncated: diffDigest.truncated
+      });
     }
     if (files.length > 0) {
       const fileReview = reviewDiffForFiles(files);
@@ -1115,7 +1157,7 @@ function finalizeResult(
 }
 
 async function maybeDigestFailure(job: JobState, evaluation: JobEvaluation, report: ReasoningReport | undefined): Promise<void> {
-  if (!FAILURE_DIGEST_ENABLED || evaluation.finalStatus !== "failed") return;
+  if (!FAILURE_DIGEST_ENABLED || !LITE_LLM_ENABLED || evaluation.finalStatus !== "failed") return;
   try {
     job.result.failure_digest = await digestFailure({
       task: job.originalPrompt,
@@ -1607,7 +1649,7 @@ export function createCodexWorkerServer(): Server {
       {
         name: "analyze",
         description:
-          "Read-only analysis: read the given files (inside SANDBOX_ROOT) and answer in a single cheap-gateway call. Does NOT start Claude Code and does NOT modify any file. Use for summarize/explain/classify; use start for anything that edits or runs. Pass branches for concurrent fan-out analysis (requires WORKER_FANOUT_ENABLED=1).",
+          "Read-only analysis: read the given files (inside SANDBOX_ROOT) and answer in a single cheap-gateway call. Does NOT start Claude Code and does NOT modify any file. Use for summarize/explain/classify; use start for anything that edits or runs. Pass branches for concurrent fan-out analysis (requires WORKER_FANOUT_ENABLED=1). With WORKER_LITE_LLM=0 the standard lane returns a deterministic read_pack evidence pack instead of an LLM answer.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1648,7 +1690,7 @@ export function createCodexWorkerServer(): Server {
       {
         name: "review",
         description:
-          "Cheap-gateway code review. Use job_id to review a finished worker diff/checks, or files to review selected sandbox files. Returns structured JSON verdict when parseable. Pass branches for concurrent fan-out review (requires WORKER_FANOUT_ENABLED=1).",
+          "Cheap-gateway code review. Use job_id to review a finished worker diff/checks, or files to review selected sandbox files. Returns structured JSON verdict when parseable. Pass branches for concurrent fan-out review (requires WORKER_FANOUT_ENABLED=1). With WORKER_LITE_LLM=0 the standard lane returns diff_digest/local diff evidence instead of an LLM verdict.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1796,7 +1838,7 @@ export function createCodexWorkerServer(): Server {
       {
         name: "draft",
         description:
-          "Draft commit messages, PR descriptions, changelog notes, or release notes from the current diff using the cheap review lane.",
+          "Draft commit messages, PR descriptions, changelog notes, or release notes from the current diff using the cheap review lane. Rejected when WORKER_LITE_LLM=0; draft in the main thread from diff_digest evidence.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1890,13 +1932,26 @@ export function createCodexWorkerServer(): Server {
         const jobId = String(toolArgs.job_id || "");
         const job = jobs.get(jobId);
         if (!job) {
-          return reject(
-            "get",
-            "job_control",
-            "Job not found or expired",
-            "Use the job_id returned by start in this worker process; if it expired, rerun start and poll the new job_id.",
-            ["start", "wait", "tail"]
-          );
+          const message = "Job not found or expired";
+          const fallback = fallbackForTool("get", message);
+          const payload = {
+            status: "ok",
+            degraded: true,
+            degradation_reason: "job_not_found_or_expired",
+            job_id: jobId,
+            message,
+            required_action: fallback.action,
+            fallback
+          };
+          const result = attachReceipt(payload, {
+            tool: "get",
+            category: "job_control",
+            input: toolArgs,
+            output: payload
+          });
+          metricExtra = { ...metricExtra, degraded: true, degradation_reason: payload.degradation_reason };
+          rememberReceipt(result);
+          return okJson(result);
         }
         const result = publicJob(job, undefined, parseOptionalBoolean(toolArgs.verbose) ?? false, "get");
         rememberReceipt(result);
@@ -2043,6 +2098,37 @@ export function createCodexWorkerServer(): Server {
           }
         }
 
+        if (!LITE_LLM_ENABLED) {
+          metricExtra = { lite_llm: "disabled" };
+          if (files.length === 0) {
+            return reject("analyze", "analysis", "WORKER_LITE_LLM=0 and no files given", "Use read_pack or search directly for evidence; analysis conclusions belong to the main thread.", [
+              "read_pack",
+              "search"
+            ]);
+          }
+          const pack = buildContextPack({
+            paths: files,
+            task: prompt,
+            prompt,
+            max_files: Math.min(files.length, 20),
+            max_bytes_per_file: 8_000
+          });
+          const payload = {
+            ...liteDisabledMarker(),
+            fallback_used: "read_pack",
+            prompt,
+            context_pack: {
+              file_count: pack.file_count,
+              packed_bytes: pack.packed_bytes,
+              truncated: pack.truncated,
+              receipt: pack.receipt
+            }
+          };
+          const result = attachReceipt(payload, { tool: "analyze", category: "analysis", input: toolArgs, output: payload });
+          rememberReceipt(result);
+          return okJson(result);
+        }
+
         try {
           const answer = await analyzeDirect(prompt, files, maxTokens);
           return textResponse(answer);
@@ -2166,6 +2252,49 @@ export function createCodexWorkerServer(): Server {
             }
             return fail("review", "review", error);
           }
+        }
+
+        if (!LITE_LLM_ENABLED) {
+          metricExtra = { lite_llm: "disabled" };
+          let payload: Record<string, unknown>;
+          let artifactRefs: string[] = [];
+          let receiptOutput: unknown;
+          let receiptTruncated = false;
+          if (job) {
+            const diffDigest = storedJobDiffDigest(job);
+            artifactRefs = diffDigest.artifactRefs;
+            receiptOutput = job.result.diff || diffDigest.summary;
+            receiptTruncated = diffDigest.truncated;
+            payload = {
+              ...liteDisabledMarker(),
+              fallback_used: "diff_digest",
+              job_id: job.id,
+              job_status: job.status,
+              changed_files: job.result.changed_files || [],
+              checks: job.result.checks || [],
+              diff_digest: diffDigest.summary
+            };
+          } else {
+            const hunkHeaders = (fileReview.diff || "").match(/^@@.*@@.*$/gm)?.slice(0, 12) || [];
+            payload = {
+              ...liteDisabledMarker(),
+              fallback_used: "local_diff_summary",
+              files: fileReview.files.length > 0 ? fileReview.files : files,
+              diff_bytes: Buffer.byteLength(fileReview.diff || "", "utf8"),
+              hunk_headers: hunkHeaders
+            };
+            receiptOutput = payload;
+          }
+          const result = attachReceipt(payload, {
+            tool: "review",
+            category: "review",
+            input: toolArgs,
+            output: receiptOutput,
+            artifactRefs,
+            truncated: receiptTruncated
+          });
+          rememberReceipt(result);
+          return okJson(result);
         }
 
         let raw: string;
@@ -2319,11 +2448,12 @@ export function createCodexWorkerServer(): Server {
         appendToolMetric(name, category, metricStatus, {
           ...reliabilityExtra,
           ...metricExtra,
+          ...(!LITE_LLM_ENABLED && (name === "analyze" || name === "review") ? { lite_llm: "disabled" } : {}),
           ...(controlOutcome.errorClass ? { failure_class: controlOutcome.errorClass } : {}),
           ...(controlOutcome.errorClass ? { tool_error_class: controlOutcome.errorClass } : {}),
           ...(controlOutcome.circuitOpened ? { circuit_opened: true } : {}),
           ...(controlOutcome.circuitClosed ? { circuit_closed: true } : {}),
-          ...(name === "diff_digest" ? { red_team: toolArgs.red_team === true || toolArgs.lite_review === true } : {})
+          ...(name === "diff_digest" ? { red_team: LITE_LLM_ENABLED && (toolArgs.red_team === true || toolArgs.lite_review === true) } : {})
         });
       }
     }

@@ -43,9 +43,9 @@ export function assessShellFailure(
   const combined = `${command}\n${output}`;
   if (status === "timeout" || /timed out|timeout/i.test(output)) return "timeout";
   if (
-    /\[fail\]/i.test(output) ||
-    (/(?:npm\s+run\s+)?(?:stats:gate|codex:audit|codex:guard)\b/i.test(command) &&
-      /error rate|must stay below|gate\s+(?:failed|inconclusive)|audit\s+failed/i.test(output))
+    /\[fail\]|\[gate\].*below target|error rate.*must stay below|fallback ratio.*exceeds|gate\s+(?:failed|inconclusive)/i.test(
+      output
+    )
   ) {
     return "gate_failure";
   }

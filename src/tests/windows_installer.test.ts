@@ -76,6 +76,24 @@ try {
   const installedEnv = fs.readFileSync(path.join(installDir, ".env"), "utf8");
   assert.ok(installedEnv.includes(`ONEAPI_API_KEY=${secret}`));
 
+  const importedEnv = path.join(temp, "host.env");
+  const importedInstallDir = path.join(temp, "imported-installed");
+  const importedConfig = path.join(temp, "imported", "config.toml");
+  fs.writeFileSync(importedEnv, `${fs.readFileSync(preset, "utf8")}\nONEAPI_API_KEY=${secret}\n`, "utf8");
+  const importedInstall = runPowerShell([
+    "-NonInteractive",
+    "-SkipPayloadInstall",
+    "-SkipDependencyInstall",
+    "-SkipDoctor",
+    "-EnvFile", importedEnv,
+    "-InstallDir", importedInstallDir,
+    "-CodexConfigPath", importedConfig
+  ]);
+  assert.strictEqual(importedInstall.status, 0, importedInstall.stderr || importedInstall.stdout);
+  assert.ok(!importedInstall.stdout.includes(secret), "imported secret leaked to installer stdout");
+  assert.ok(fs.readFileSync(path.join(importedInstallDir, ".env"), "utf8").includes(`ONEAPI_API_KEY=${secret}`));
+  assert.ok(!fs.readFileSync(importedConfig, "utf8").includes(secret));
+
   const dryInstallDir = path.join(temp, "dry-installed");
   const dryConfig = path.join(temp, "dry", "config.toml");
   const dryRun = runPowerShell([

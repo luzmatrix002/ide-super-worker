@@ -628,6 +628,7 @@ export function recordToolControlOutcome(
   pruneToolControl(now);
   if (!circuitEnabled()) return {};
   if (status === "rejected") return {};
+  if (extra.tool_control_action !== undefined) return { circuitClosed: false };
   const errorClass = status === "error" ? detectToolErrorClass(tool, String(category), extra) : undefined;
   toolControlEvents.push({ ts: now, tool, category: String(category), status, errorClass });
   const circuit = status === "error" ? maybeOpenCircuit(tool, String(category), errorClass, now) : undefined;

@@ -14,6 +14,16 @@ WORKER_PRICE_CACHE=0.027
 WORKER_PRICE_TABLE={"deepseek-v4-pro":{"input":0.55,"output":2.19}}
 ```
 
+## Deterministic-Only Mode
+
+Set this when the main Codex model should retain judgment and the worker should return only deterministic evidence. The default is `1` for backward compatibility.
+
+```env
+WORKER_LITE_LLM=0
+```
+
+With `0`, standard `analyze`/`review` return evidence packs, failed `shell` digests are deterministic, job `failure_digest` and diff red-team judgment are skipped, and `draft` is rejected. Explicit `quality_mode:"high"`, fan-out, the semantic reviewer, and `start` are unaffected.
+
 ## Lite Model Cache
 
 Use these when `analyze`, `review`, or failure digests call a cheap gateway model often enough to benefit from a small disk cache.

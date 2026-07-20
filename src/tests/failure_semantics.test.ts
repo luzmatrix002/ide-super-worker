@@ -85,6 +85,15 @@ assert.equal(
   "gate_failure",
   "gate-form [fail] output must route to gate_failure, not test_failure"
 );
+for (const output of [
+  "[gate] command_digest below target",
+  "overall tool error rate 5.0% must stay below 5%",
+  "fallback ratio 11.0% exceeds 10%",
+  "gate failed",
+  "gate inconclusive"
+]) {
+  assert.equal(failureSemantics.assessShellFailure("synthetic gate", "failed", output), "gate_failure", output);
+}
 assert.equal(
   failureSemantics.assessShellFailure("@'\nSelect-Object -First 3\n'@", "failed", "乱码的 CMD 输出"),
   "shell_mismatch",

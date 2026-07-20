@@ -3,7 +3,7 @@ import { createHash, createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { attachReceipt, saveArtifact } from "./artifacts.js";
-import { CHECK_OUTPUT_RESPONSE_MAX, SANDBOX_ROOT } from "./config.js";
+import { CHECK_OUTPUT_RESPONSE_MAX, LITE_LLM_ENABLED, SANDBOX_ROOT } from "./config.js";
 import {
   deliverContextPack,
   type ContextPackFile,
@@ -226,12 +226,51 @@ function riskForFile(file: string): "low" | "medium" | "high" {
   return "medium";
 }
 
+export function digestStoredDiff(
+  diff: string,
+  changedFiles: string[],
+  fileStats?: Array<{ file: string; status?: string; added?: number; deleted?: number }>
+) {
+  const truncated = /\.\.\.\[(?:diff|untracked diff) truncated at \d+ bytes\]/i.test(diff);
+  const files = (fileStats || changedFiles.map((file) => ({ file }))).map((file) => ({
+    ...file,
+    risk: riskForFile(file.file)
+  }));
+  const highRiskFiles = files.filter((file) => file.risk === "high").map((file) => file.file);
+  const hunkSummaries = diff
+    .split(/^diff --git /m)
+    .filter(Boolean)
+    .slice(0, 20)
+    .map((chunk) => {
+      const header = `diff --git ${chunk.split(/\r?\n/).slice(0, 8).join("\n")}`;
+      const hunkHeaders = [...chunk.matchAll(/^@@.*@@.*$/gm)].slice(0, 12).map((match) => match[0]);
+      return truncateBytes([header, ...hunkHeaders].join("\n"), 4_000, "hunk summary");
+    });
+  const artifact = saveArtifact("diff_digest", diff);
+  return {
+    summary: {
+      changed_files: changedFiles,
+      files,
+      high_risk_files: highRiskFiles,
+      risk: highRiskFiles.length ? "high" : files.some((file) => file.risk === "medium") ? "medium" : "low",
+      hunk_summaries: hunkSummaries,
+      truncated
+    },
+    artifactRefs: artifact ? [artifact.artifact_ref] : [],
+    truncated
+  };
+}
+
 export async function digestDiff(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const cwd = validatePath(String(args.cwd || SANDBOX_ROOT));
   const pathspec = diffPathspec(args.files);
   const nameStatus = git(cwd, ["diff", "--name-status", ...pathspec]);
   const numstat = git(cwd, ["diff", "--numstat", ...pathspec]);
-  const summary = collectWorkspaceSummary(cwd, undefined, Math.min(80_000, Number(args.max_diff_bytes) || 80_000));
+  const summary = collectWorkspaceSummary(
+    cwd,
+    pathspec.length > 1 ? { relativePaths: pathspec.slice(1), absolutePaths: [] } : undefined,
+    Math.min(80_000, Number(args.max_diff_bytes) || 80_000)
+  );
   if (!nameStatus.ok && !summary.diff) throw new Error(`git diff failed: ${nameStatus.stderr}`);
 
   const stats = new Map<string, { added: number; deleted: number }>();
@@ -258,19 +297,14 @@ export async function digestDiff(args: Record<string, unknown>): Promise<Record<
       };
     });
 
-  const highRiskFiles = files.filter((file) => file.risk === "high").map((file) => file.file);
-  const hunks = summary.diff
-    .split(/^diff --git /m)
-    .filter(Boolean)
-    .slice(0, 20)
-    .map((chunk) => {
-      const header = `diff --git ${chunk.split(/\r?\n/).slice(0, 8).join("\n")}`;
-      const hunkHeaders = [...chunk.matchAll(/^@@.*@@.*$/gm)].slice(0, 12).map((match) => match[0]);
-      return truncateBytes([header, ...hunkHeaders].join("\n"), 4_000, "hunk summary");
-    });
-
   let review: unknown;
-  if (args.red_team === true || args.lite_review === true) {
+  const redTeamRequested = args.red_team === true || args.lite_review === true;
+  if (redTeamRequested && !LITE_LLM_ENABLED) {
+    review = {
+      verdict: "disabled",
+      reason: "WORKER_LITE_LLM=0 disables lite-LLM judgment; judge this diff in the main thread from the digest and the diff artifact."
+    };
+  } else if (redTeamRequested) {
     const raw = await reviewDirect({
       diff: summary.diff,
       focus: "Red-team this diff for regression, public API, security, data-loss, and missing-test risk. Be concise.",
@@ -283,23 +317,19 @@ export async function digestDiff(args: Record<string, unknown>): Promise<Record<
     }
   }
 
+  const evidence = digestStoredDiff(summary.diff, summary.changed_files, files);
   const result = {
     cwd,
-    changed_files: summary.changed_files,
-    files,
-    high_risk_files: highRiskFiles,
-    risk: highRiskFiles.length ? "high" : files.some((file) => file.risk === "medium") ? "medium" : "low",
-    hunk_summaries: hunks,
+    ...evidence.summary,
     red_team: review
   };
-  const artifact = saveArtifact("diff_digest", summary.diff);
   return attachReceipt(result, {
     tool: "diff_digest",
     category: "diff_digest",
     input: args,
     output: summary.diff || result,
-    artifactRefs: artifact ? [artifact.artifact_ref] : [],
-    truncated: summary.diff.includes("[diff truncated")
+    artifactRefs: evidence.artifactRefs,
+    truncated: evidence.truncated
   });
 }
 
@@ -348,6 +378,15 @@ async function runShellCommand(
       resolve({ code, signal, output, timedOut });
     });
   });
+}
+
+function deterministicFailureDigest(output: string): string {
+  const interesting = output
+    .split(/\r?\n/)
+    .filter((line) => /error|fail|exception|timeout|not found|cannot/i.test(line))
+    .slice(-30)
+    .join("\n");
+  return truncateBytes(interesting || output, CHECK_OUTPUT_RESPONSE_MAX, "command digest");
 }
 
 export async function runWorkerShell(args: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -401,6 +440,8 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
     if (!commandResult.timedOut && commandResult.code === 0) {
       const lines = output.split(/\r?\n/).filter(Boolean);
       digest = `command passed; ${lines.length} output line${lines.length === 1 ? "" : "s"}`;
+    } else if (!LITE_LLM_ENABLED) {
+      digest = deterministicFailureDigest(output);
     } else {
       try {
         digest = await digestFailure({
@@ -411,12 +452,7 @@ export async function runWorkerShell(args: Record<string, unknown>): Promise<Rec
           blockers: commandResult.timedOut ? ["command timed out"] : [`exit ${commandResult.code}`]
         });
       } catch {
-        const interesting = output
-          .split(/\r?\n/)
-          .filter((line) => /error|fail|exception|timeout|not found|cannot/i.test(line))
-          .slice(-30)
-          .join("\n");
-        digest = truncateBytes(interesting || output, CHECK_OUTPUT_RESPONSE_MAX, "command digest");
+        digest = deterministicFailureDigest(output);
       }
     }
   }
@@ -557,6 +593,16 @@ export function gitHistory(args: Record<string, unknown>): Record<string, unknow
 }
 
 export async function draftFromChanges(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!LITE_LLM_ENABLED) {
+    return attachReceipt(
+      {
+        status: "rejected",
+        reason: "draft uses the lite-LLM lane, which is disabled by WORKER_LITE_LLM=0",
+        required_action: "Run diff_digest and draft the text in the main thread from the digest and artifact."
+      },
+      { tool: "draft", category: "draft", input: args, output: "disabled" }
+    );
+  }
   const cwd = validatePath(String(args.cwd || SANDBOX_ROOT));
   const kind = typeof args.kind === "string" ? args.kind : "commit";
   const maxDiffBytes = Math.min(80_000, Math.max(5_000, Math.trunc(Number(args.max_diff_bytes ?? 40_000))));

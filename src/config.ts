@@ -66,6 +66,7 @@ export const FAILURE_DIGEST_ENABLED = readBooleanEnv("WORKER_FAILURE_DIGEST", fa
 export const DIGEST_BEFORE_REVISE = readBooleanEnv("WORKER_DIGEST_BEFORE_REVISE", true);
 export const ADAPTER_PREFIX_CACHE = readBooleanEnv("ADAPTER_PREFIX_CACHE", false);
 export const LITE_MODEL = (process.env.WORKER_LITE_MODEL || "").trim();
+export const LITE_LLM_ENABLED = readBooleanEnv("WORKER_LITE_LLM", true);
 export const LITE_CACHE_DIR = readLiteCacheDir();
 export const LITE_CACHE_TTL_MS = readIntegerEnv("WORKER_LITE_CACHE_TTL_MS", 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
 export const CHECK_TIMEOUT_MS = readIntegerEnv("CHECK_TIMEOUT_MS", 10 * 60 * 1000, 1_000, 60 * 60 * 1000);

@@ -53,6 +53,7 @@ const rootGuardRun = spawnSync(
 );
 assert.equal(rootGuardRun.status, 0, rootGuardRun.stderr);
 assert.match(rootGuardRun.stdout, /filesystem-root searches are disabled/);
+assert.throws(() => server.validateSearchPaths([outside]), /search path escapes SANDBOX_ROOT/);
 
 function readSourceFiles(dir: string): Array<{ file: string; text: string }> {
   const entries: Array<{ file: string; text: string }> = [];
@@ -89,12 +90,15 @@ const sibling = `${root}-sibling`;
 fs.mkdirSync(sibling);
 expectRejectsPath(sibling);
 
+const link = path.join(root, "link-outside");
 try {
-  const link = path.join(root, "link-outside");
   fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
-  expectRejectsPath(link);
 } catch {
   console.log("[skip] symlink test unavailable on this platform");
+}
+if (fs.existsSync(link)) {
+  expectRejectsPath(link);
+  assert.throws(() => server.validateSearchPaths([path.join(link, "missing")]), /search path escapes SANDBOX_ROOT/);
 }
 
 fs.mkdirSync(path.join(project, "src"));
@@ -634,6 +638,50 @@ try {
   toolErrorControl.resetToolControlState();
 }
 
+toolErrorControl.resetToolControlState();
+toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "error",
+  { error_message: "fallback upstream returned 404 (default-window first)" },
+  now.getTime()
+);
+toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "error",
+  { error_message: "fallback upstream returned 404 (default-window second)" },
+  now.getTime() + 1
+);
+const defaultWindowTooEarly = toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "ok",
+  {},
+  now.getTime() + 30_000
+);
+assert.equal(defaultWindowTooEarly.circuitClosed, false);
+assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 30_000)?.action, "degrade");
+const interceptedAfterDefaultWindow = toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "ok",
+  { tool_control_action: "degrade" },
+  now.getTime() + 120_001
+);
+assert.equal(interceptedAfterDefaultWindow.circuitClosed, false);
+assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 120_001)?.action, "degrade");
+const defaultWindowClose = toolErrorControl.recordToolControlOutcome(
+  "review",
+  "review",
+  "ok",
+  {},
+  now.getTime() + 120_002
+);
+assert.equal(defaultWindowClose.circuitClosed, true);
+assert.equal(toolErrorControl.getToolControlDecision("review", "review", now.getTime() + 120_002), undefined);
+toolErrorControl.resetToolControlState();
+
 const circuitStateFile = path.join(root, "tool-circuit-state.json");
 process.env.WORKER_TOOL_CIRCUIT_STATE_FILE = circuitStateFile;
 process.env.WORKER_TOOL_CIRCUIT_STATE_SAVE_MIN_MS = "0";
@@ -970,6 +1018,19 @@ assert.equal(dashSearchResult.mode, "lines");
 const fileSearchResult = search.searchWorkspace({ pattern: "needle", dirs: [path.join(project, "src", "needle.txt")] });
 assert.equal(fileSearchResult.mode, "lines");
 assert(fileSearchResult.results.some((line) => line.includes("needle here")));
+const missingSearchDir = path.join(project, "missing-search-dir");
+const allMissingSearchResult = search.searchWorkspace({ pattern: "needle", dirs: [missingSearchDir] });
+assert.equal(allMissingSearchResult.count, 0);
+assert.deepEqual(allMissingSearchResult.results, []);
+assert.equal(allMissingSearchResult.degraded, true);
+assert.match(allMissingSearchResult.degradation_reason || "", /all search dirs missing or inaccessible/);
+const partialMissingSearchResult = search.searchWorkspace({
+  pattern: "needle",
+  dirs: [missingSearchDir, path.join(project, "src", "needle.txt")]
+});
+assert(partialMissingSearchResult.results.some((line) => line.includes("needle here")));
+assert.equal(partialMissingSearchResult.degraded, true);
+assert.match(partialMissingSearchResult.degradation_reason || "", /some search dirs missing or inaccessible/);
 const noisySearchDir = path.join(project, "noisy-search");
 fs.mkdirSync(noisySearchDir);
 for (let i = 0; i < 80; i += 1) {
@@ -1008,6 +1069,23 @@ const reliabilityRejection = server.preflightStartRejection({
 }) as any;
 assert.equal(reliabilityRejection.status, "rejected");
 assert(reliabilityRejection.reason.includes("reliability_policy blocked strict job"));
+const missingPathRejection = server.preflightStartRejection({
+  prompt: "hello",
+  allowed_dirs: [path.join(project, "missing-start-dir")]
+}) as any;
+assert.equal(missingPathRejection.status, "rejected");
+assert.deepEqual(missingPathRejection.outcome.reason_codes, ["missing_path"]);
+assert.equal(missingPathRejection.failure_class, "missing_path");
+for (const invalidModel of ["", "   ", 123]) {
+  const missingModelRejection = server.preflightStartRejection({
+    prompt: "hello",
+    allowed_dirs: [project],
+    model: invalidModel
+  }) as any;
+  assert.equal(missingModelRejection.status, "rejected");
+  assert.deepEqual(missingModelRejection.outcome.reason_codes, ["missing_command"]);
+  assert.equal(missingModelRejection.failure_class, "missing_command");
+}
 process.env.ALLOW_BYPASS_PERMISSIONS = "1";
 try {
   assert.equal(
@@ -1160,16 +1238,26 @@ try {
 }
 
 let fallbackAttemptCount = 0;
+const fallbackEvents: string[] = [];
+const originalRandom = Math.random;
+const originalSetTimeout = globalThis.setTimeout;
 const fallbackMetricsFile = path.join(root, "lite-fallback-metrics.jsonl");
 process.env.FALLBACK_BASE_URL = "https://fallback.example.test/v1";
 process.env.FALLBACK_API_KEY = "fallback-unit-test-api-key";
 process.env.FALLBACK_MODEL = "fallback-lite-model";
 process.env.WORKER_METRICS_FILE = fallbackMetricsFile;
+Math.random = () => 0.5;
+globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+  fallbackEvents.push(`delay:${delay}`);
+  return originalSetTimeout(callback, 0, ...args);
+}) as typeof setTimeout;
 globalThis.fetch = (async (url: any) => {
   fallbackAttemptCount += 1;
   if (String(url).startsWith("https://gateway.example.test")) {
+    fallbackEvents.push("fetch:primary");
     return new Response("primary failed", { status: 500 });
   }
+  fallbackEvents.push("fetch:fallback");
   return new Response(
     JSON.stringify({
       model: "fallback-lite-model",
@@ -1183,6 +1271,7 @@ try {
   const answer = await lite.analyzeDirect("I5 fallback success count", [path.join(project, "src", "needle.txt")], 64);
   assert.equal(answer, "fallback analysis ok");
   assert.equal(fallbackAttemptCount, 2);
+  assert.deepEqual(fallbackEvents, ["fetch:primary", "delay:250", "fetch:fallback"]);
   const rows = fs.readFileSync(fallbackMetricsFile, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
   const successfulUpstreamRows = rows.filter((row) => row.route !== "cache");
   assert.equal(successfulUpstreamRows.length, 1);
@@ -1190,6 +1279,8 @@ try {
   assert.equal(successfulUpstreamRows[0].tool, "analyze");
 } finally {
   globalThis.fetch = originalFetch;
+  globalThis.setTimeout = originalSetTimeout;
+  Math.random = originalRandom;
   delete process.env.FALLBACK_BASE_URL;
   delete process.env.FALLBACK_API_KEY;
   delete process.env.FALLBACK_MODEL;
@@ -1392,5 +1483,26 @@ try {
   globalThis.fetch = originalFetch;
   delete process.env.ADAPTER_MAX_RETRIES;
 }
+
+const scopedDiffProject = path.join(root, "scoped-diff-project");
+fs.mkdirSync(path.join(scopedDiffProject, "src"), { recursive: true });
+spawnSync("git", ["init"], { cwd: scopedDiffProject, stdio: "ignore" });
+spawnSync("git", ["config", "user.email", "test@example.invalid"], { cwd: scopedDiffProject, stdio: "ignore" });
+spawnSync("git", ["config", "user.name", "Test"], { cwd: scopedDiffProject, stdio: "ignore" });
+fs.writeFileSync(path.join(scopedDiffProject, "src", "a.txt"), "target-content\n", "utf8");
+fs.writeFileSync(path.join(scopedDiffProject, "src", "b.txt"), "unrelated-content\n", "utf8");
+spawnSync("git", ["add", "."], { cwd: scopedDiffProject, stdio: "ignore" });
+spawnSync("git", ["commit", "-m", "init"], { cwd: scopedDiffProject, stdio: "ignore" });
+fs.writeFileSync(path.join(scopedDiffProject, "src", "a.txt"), "target-modified\n", "utf8");
+fs.writeFileSync(path.join(scopedDiffProject, "src", "b.txt"), "unrelated-modified\n", "utf8");
+
+const scopedDigest = await workerTools.digestDiff({ cwd: scopedDiffProject, files: ["src/a.txt"] });
+assert.deepEqual(scopedDigest.changed_files, ["src/a.txt"]);
+const scopedHunks = (scopedDigest.hunk_summaries as string[]).join("\n");
+assert(scopedHunks.includes("a.txt"));
+assert(!scopedHunks.includes("b.txt"));
+const scopedArtifact = artifacts.getArtifactSlice({ artifact_ref: (scopedDigest.receipt as any).artifact_refs[0], limit: 2_000 });
+assert(String(scopedArtifact.text).includes("a.txt"));
+assert(!String(scopedArtifact.text).includes("b.txt"));
 
 console.log("core tests passed");

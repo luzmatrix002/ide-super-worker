@@ -16,7 +16,7 @@ export interface SearchResult {
   results: string[];
   count: number;
   truncated: boolean;
-  engine: "rg" | "node";
+  engine: "rg" | "git" | "node";
   degraded?: boolean;
   degradation_reason?: string;
 }
@@ -100,7 +100,7 @@ function runGitGrep(input: SearchInput, limit: number, mode: "lines" | "files" |
   if (result.status !== 0 && result.status !== 1) return undefined;
   const lines = (result.stdout || "").split(/\r?\n/).filter(Boolean).map(trimLine);
   const sliced = lines.slice(0, limit);
-  return { mode, results: sliced, count: lines.length, truncated: lines.length > sliced.length, engine: "git" as SearchResult["engine"] };
+  return { mode, results: sliced, count: lines.length, truncated: lines.length > sliced.length, engine: "git" };
 }
 
 function matchesGlob(file: string, glob?: string): boolean {
@@ -284,19 +284,32 @@ export function searchWorkspace(input: SearchInput): SearchResult {
     };
   }
   const filteredInput = existingDirs.length < input.dirs.length ? { ...input, dirs: existingDirs } : input;
+  const withMissingDirContext = (result: SearchResult): SearchResult =>
+    missingDirs.length === 0
+      ? result
+      : {
+          ...result,
+          degraded: true,
+          degradation_reason: [
+            result.degradation_reason,
+            `some search dirs missing or inaccessible: ${missingDirs.join(", ")}`
+          ]
+            .filter(Boolean)
+            .join("; ")
+        };
   // Defence-in-depth: wrap each engine in try-catch so that ANY unexpected
   // error from one engine falls through to the next instead of aborting the
   // entire search.  The last engine (node search) may still throw — that is
   // correct because there is no further fallback.
   try {
     const rgResult = runRg(filteredInput, limit, mode);
-    if (rgResult) return rgResult;
+    if (rgResult) return withMissingDirContext(rgResult);
   } catch {
     // Fall through to git grep.
   }
   try {
     const gitResult = runGitGrep(filteredInput, limit, mode);
-    if (gitResult) return gitResult;
+    if (gitResult) return withMissingDirContext(gitResult);
   } catch {
     // Fall through to node search.
   }
@@ -306,9 +319,9 @@ export function searchWorkspace(input: SearchInput): SearchResult {
   // deeply nested directory, EACCES on statSync) should still produce a
   // degraded result instead of propagating to the caller as a hard error.
   try {
-    return runNodeSearch(filteredInput, limit, mode);
+    return withMissingDirContext(runNodeSearch(filteredInput, limit, mode));
   } catch (error) {
-    return {
+    return withMissingDirContext({
       mode,
       results: [],
       count: 0,
@@ -316,6 +329,6 @@ export function searchWorkspace(input: SearchInput): SearchResult {
       engine: "node",
       degraded: true,
       degradation_reason: `node_search_failed: ${error instanceof Error ? error.message : String(error)}`
-    };
+    });
   }
 }
