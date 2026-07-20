@@ -1,5 +1,33 @@
 # Promotion Kit
 
+## 2.6.2 launch assets
+
+![IDE Super Worker async evidence lane](docs/social-card.png)
+
+### 中文发布短文
+
+Codex 应该把精力留给规划、判断和验收，而不是吞完整仓库、反复失败日志和巨大 diff。
+
+**IDE Super Worker 2.6.2** 给 Codex 增加了一条异步证据通道：把搜索、上下文打包、实现循环和检查交给后台 worker；主线程只接收改动文件、检查结果、可选 diff 与可审计的证据。
+
+这版新增 `WORKER_LITE_LLM=0`：标准 `analyze` / `review` 可退化为确定性的证据包，不再让低成本模型替主线程下结论。也就是说，证据交给 worker，判断保留给 Codex。
+
+适合在大型代码库中反复“读代码 → 改代码 → 跑检查”的工作流。它不承诺任何固定节省比例；实际成本和质量应由项目自己的任务与指标验证。
+
+项目地址：<https://github.com/luzmatrix002/ide-super-worker>
+
+### English launch post
+
+Codex should spend its context on planning, judgment, and acceptance—not on swallowing a whole repository, repeated failure logs, and giant diffs.
+
+**IDE Super Worker 2.6.2** adds an asynchronous evidence lane for Codex. Search, context packing, implementation loops, and checks run in a background worker; the main thread receives changed files, checks, optional diffs, and auditable evidence.
+
+This release adds `WORKER_LITE_LLM=0`: standard `analyze` and `review` can return deterministic evidence packs instead of asking a cheap model to make conclusions. The worker gathers evidence; Codex keeps the judgment.
+
+It is built for large codebases with repeated read → edit → test loops. It does not promise a fixed savings percentage—measure cost and quality against your own workload.
+
+Project: <https://github.com/luzmatrix002/ide-super-worker>
+
 ## 中文发布短文
 
 我做了一个给 Codex 用的异步 MCP worker：把大文件阅读、代码修复、反复跑测试这些

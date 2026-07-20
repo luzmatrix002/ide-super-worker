@@ -19,6 +19,10 @@ quality-targets.local.json
 .playwright-cli/
 .fix-backups/
 /codex-guard-status.json
+
+# Local working notes may contain copied terminal output or configuration context.
+# Keep them outside commits; existing tracked historical notes are unaffected.
+/log/
 优化执行手册_降本增效.md
 部署手册_低成本Codex省额度方案.md
 

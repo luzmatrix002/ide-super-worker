@@ -1,5 +1,7 @@
 # IDE Super Worker
 
+![IDE Super Worker async evidence lane](docs/social-card.png)
+
 [中文说明](#中文说明) · [English](#ide-super-worker)
 
 ## 中文说明
@@ -36,6 +38,12 @@ flowchart LR
 
 这样 Codex 专注于高价值判断，worker 吸收冗长的中间过程，减少主线程需要读取的
 文件和测试日志。
+
+### 纯证据模式（`WORKER_LITE_LLM=0`）
+
+建议在本仓 MCP 配置中设置 `WORKER_LITE_LLM=0`，让判断权留在 Codex 主模型：标准 `analyze` / `review` 不再调用廉价 LLM，而是返回可核查的 `read_pack` / diff 证据；`shell` 失败摘要改为确定性提取，job `failure_digest` 与 red-team 跳过，`draft` 返回结构化拒绝。
+
+该开关默认仍为 `1`，因此未配置时行为不变。显式 `quality_mode:"high"`、fan-out、语义审查和 `start` 执行路径不受影响。
 
 ### 质量优先模式
 
@@ -179,6 +187,14 @@ This project gives you the missing plumbing:
 - Optional fallback gateway when the primary provider fails.
 - Optional worktree isolation for parallel jobs inside one repository.
 - Secret redaction in logs and tool responses.
+
+## Deterministic-Only Mode (WORKER_LITE_LLM=0)
+
+Set `WORKER_LITE_LLM=0` when the main Codex model should retain judgment instead of importing unsupported conclusions from the cheap-LLM lane. Standard `analyze` and `review` then return deterministic `read_pack` or diff evidence for the caller to interpret.
+
+In this mode, failed `shell` commands use a deterministic digest, job `failure_digest` and diff red-team judgment are skipped, and `draft` returns a structured rejection. The default remains `1`, so existing installations keep their current behavior unless they opt in.
+
+Explicit `quality_mode:"high"`, fan-out, the semantic reviewer, and the `start` execution path are unaffected.
 
 ## Use Cases
 
@@ -369,6 +385,7 @@ For less common stats, cache, reliability, and circuit-breaker settings, see [Ad
 | `WORKER_EVAL_SUITE_ID` / `WORKER_EVAL_TASK_ID` / `WORKER_EVAL_RUN_ID` / `WORKER_EVAL_ARM` | Optional correlation context appended to worker metrics during isolated eval runs. |
 | `WORKER_PRICE_INPUT` / `WORKER_PRICE_OUTPUT` / `WORKER_PRICE_CACHE` | Optional USD-per-1M-token prices used by `npm run stats`; accounting only, never a worker LLM cost gate. |
 | `WORKER_PRICE_TABLE` | Optional JSON model price overrides for `npm run stats`; must not affect primary/fallback/escalation selection. |
+| `WORKER_LITE_LLM` | Set `0` to disable the cheap-LLM judgment lane: standard `analyze`/`review` return deterministic evidence packs, shell failure digests become deterministic, job `failure_digest` and red-team judgment are skipped, and `draft` is rejected. Explicit `quality_mode:"high"`, fan-out, the semantic reviewer, and `start` are unaffected. Default `1`. |
 | `WORKER_FAILURE_DIGEST` | Set `1` to generate a cheap-gateway diagnosis on failed jobs. |
 | `WORKER_DIGEST_BEFORE_REVISE` | Set `0` to avoid generating a failure digest before auto-revise. |
 | `WORKER_LITE_MODEL` | Optional cheaper model for `analyze`, `review`, and `failure_digest`. |
